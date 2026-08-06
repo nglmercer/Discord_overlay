@@ -9,8 +9,10 @@ use axum::routing::get;
 use axum::Router;
 use reqwest::Client;
 use serde::Deserialize;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
 #[derive(Clone)]
@@ -20,12 +22,26 @@ pub struct AppState {
 }
 
 pub fn app_router(state: AppState) -> Router {
+    let assets_dir: PathBuf = state.config.assets.dir.clone();
+    if !assets_dir.exists() {
+        tracing::warn!(
+            dir = %assets_dir.display(),
+            "assets directory does not exist yet — create it and drop PNG/WebP/GIF files there"
+        );
+    } else {
+        tracing::info!(dir = %assets_dir.display(), "serving local images at /assets/*");
+    }
+
+    // Serve local avatar files: GET /assets/alice-idle.png → assets/alice-idle.png
+    let static_files = ServeDir::new(assets_dir).append_index_html_on_directories(false);
+
     Router::new()
         .route("/", get(index))
         .route("/health", get(health))
         .route("/overlay", get(overlay))
         .route("/css", get(preview_css))
         .route("/proxy", get(asset_proxy))
+        .nest_service("/assets", static_files)
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -36,32 +52,42 @@ pub fn app_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn index() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+async fn index(State(state): State<AppState>) -> impl IntoResponse {
+    let assets = state.config.assets.dir.display();
+    let base = state.config.public_base_url();
+    let body = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <title>Discord Overlay Proxy</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
-    code { background: #f4f4f4; padding: 0.1em 0.35em; border-radius: 4px; }
-    a { color: #5865f2; }
+    body {{ font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; }}
+    code {{ background: #f4f4f4; padding: 0.1em 0.35em; border-radius: 4px; }}
+    a {{ color: #5865f2; }}
+    pre {{ background: #f4f4f4; padding: 0.75rem 1rem; border-radius: 8px; overflow-x: auto; }}
   </style>
 </head>
 <body>
   <h1>Discord Overlay Proxy</h1>
   <p>Transparent Streamkit overlay with custom avatars for TikTok Live Studio.</p>
   <ul>
-    <li><a href="/overlay"><code>/overlay</code></a> — proxied overlay (uses <code>config.toml</code> Streamkit URL)</li>
-    <li><code>/overlay?target=URL</code> — override Streamkit URL for this request</li>
+    <li><a href="/overlay"><code>/overlay</code></a> — proxied overlay</li>
+    <li><code>/overlay?target=URL</code> — override Streamkit URL</li>
     <li><a href="/css"><code>/css</code></a> — preview generated CSS</li>
-    <li><a href="/health"><code>/health</code></a> — liveness check</li>
+    <li><code>/assets/…</code> — local images from <code>{assets}/</code></li>
+    <li><a href="/health"><code>/health</code></a> — liveness</li>
   </ul>
+  <h2>Local images</h2>
+  <p>Drop files in <code>{assets}/</code>, then reference them in <code>config.toml</code>:</p>
+  <pre>[users.YOUR_DISCORD_ID]
+idle_url = "alice-idle.png"
+speaking_url = "alice-speaking.png"</pre>
+  <p>They are served as <code>{base}/assets/…</code> (absolute URLs, so Streamkit’s base tag cannot break them).</p>
 </body>
-</html>"#,
-    )
+</html>"#
+    );
+    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], body)
 }
 
 async fn health() -> impl IntoResponse {

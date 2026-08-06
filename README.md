@@ -39,9 +39,38 @@ cargo run -- ./my-config.toml
 |-----------|---------|
 | `[server]` | Bind host/port (default `127.0.0.1:3000`) |
 | `[streamkit]` | Default Streamkit overlay URL |
+| `[assets]` | Local image folder (default `assets/`) |
 | `[users.<discord_id>]` | `idle_url` + `speaking_url` per user |
 
 Enable **Developer Mode** in Discord → right-click a user → **Copy User ID**.
+
+### Local images
+
+1. Put files in `./assets/` (created automatically on first run):
+
+```text
+assets/
+  alice-idle.png
+  alice-speaking.png
+```
+
+2. Reference them by **filename** (not `file://`):
+
+```toml
+[users.123456789012345678]
+idle_url = "alice-idle.png"
+speaking_url = "alice-speaking.png"
+```
+
+The server rewrites those to absolute URLs:
+
+```text
+http://127.0.0.1:3000/assets/alice-idle.png
+```
+
+That matters because the overlay injects Streamkit’s `<base href>` — relative paths would otherwise resolve on Discord’s domain, not yours.
+
+You can still use full remote URLs (`https://…`) if the image is hosted elsewhere.
 
 ### Streamkit URL binding
 
@@ -55,6 +84,7 @@ Enable **Developer Mode** in Discord → right-click a user → **Copy User ID**
 | `GET /` | Small index page |
 | `GET /overlay` | Fetch Streamkit HTML, inject CSS, serve |
 | `GET /css` | Preview generated stylesheet |
+| `GET /assets/*` | **Local images** from `./assets/` |
 | `GET /proxy?url=...` | Optional asset proxy (Discord hosts only) |
 | `GET /health` | Liveness |
 

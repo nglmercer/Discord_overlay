@@ -26,8 +26,15 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(
         path = %config_path.display(),
         users = config.users.len(),
+        assets = %config.assets.dir.display(),
         "loaded configuration"
     );
+
+    // Ensure the local image folder exists so drops are easy.
+    if !config.assets.dir.exists() {
+        std::fs::create_dir_all(&config.assets.dir)?;
+        tracing::info!(dir = %config.assets.dir.display(), "created assets directory");
+    }
 
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(10))
@@ -42,7 +49,8 @@ async fn main() -> anyhow::Result<()> {
     let addr = config.bind_addr();
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!(%addr, "discord overlay proxy listening");
-    tracing::info!("open http://{addr}/overlay in TikTok Live Studio");
+    tracing::info!("overlay → http://{addr}/overlay");
+    tracing::info!("local images → http://{addr}/assets/<file>  (from ./assets/)");
 
     axum::serve(listener, app_router(state)).await?;
     Ok(())
