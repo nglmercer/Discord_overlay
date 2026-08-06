@@ -25,6 +25,14 @@ li > img.voice_avatar {
     display: none;
 }
 
+/* Streamkit adds a green speaking indicator to the state wrapper/avatar. */
+li.voice_state,
+li.voice_state > img.voice_avatar {
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+
 @keyframes speak-bounce {
     0%, 100% { transform: translateY(0) scale(1); }
     25%      { transform: translateY(-8px) scale(1.03); }
