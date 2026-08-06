@@ -5,11 +5,15 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
-axum = { version = "0.8.9", default-features = false, features = ["http1", "query", "tokio", "tracing"] }
+futures-util = { version = "0.3.33", default-features = false, features = ["sink"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "query", "tokio", "tracing", "ws"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["native-tls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.19"
 tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+# Matches the version axum's `ws` feature uses, so only one copy is compiled.
+# The Discord RPC socket is plain `ws://127.0.0.1`, so no TLS features needed.
+tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["connect", "handshake"] }
 toml = { version = "1.1.4", default-features = false, features = ["parse", "serde"] }
 tower-http = { version = "0.7.0", default-features = false, features = ["cors", "fs", "trace"] }
 tracing = "0.1.44"

@@ -3,6 +3,7 @@ mod css;
 mod proxy;
 mod reload;
 mod routes;
+mod rpc;
 
 use config::Config;
 use reload::ConfigWatcher;

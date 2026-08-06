@@ -82,12 +82,13 @@ You can still use full remote URLs (`https://…`) if the image is hosted elsewh
 | Path | Description |
 |------|-------------|
 | `GET /` | Small index page |
-| `GET /overlay` | Fetch Streamkit HTML, inject CSS, serve |
+| `GET /overlay` | Entry point — redirects to the proxied Streamkit path |
 | `GET /css` | Preview generated stylesheet |
 | `GET /assets/*` | **Local images** from `./assets/` |
 | `GET /proxy?url=...` | Optional asset proxy (Discord hosts only) |
 | `GET /health` | Liveness |
 | `GET /reload-events?since=N` | Hot-reload long poll (used by the injected script) |
+| `ANY /*` | Reverse-proxied to the Streamkit origin |
 
 ## Hot reload
 
@@ -103,11 +104,31 @@ itself within about a second. No restart, no clicking "refresh" in the source.
 - `assets.dir` is the one setting that still requires a restart; the static
   mount is created at startup.
 
-## How CSS injection works
+## How it works
 
-1. Server fetches the Streamkit HTML with `reqwest`
-2. Injects `<base href="...">` so relative scripts/styles resolve on Streamkit (WebSockets keep working)
-3. Injects a `<style>` block that:
+The proxy is a **same-origin reverse proxy**, not just an HTML rewriter. Everything
+the browser loads — the Streamkit HTML, `/static/js/*`, images, Cloudflare's
+challenge endpoints — is relayed through `127.0.0.1:3000`, so from the browser's
+point of view there is only one origin.
+
+That matters because the alternative (serving the HTML locally and pointing a
+`<base href>` at `streamkit.discord.com`) puts the document and its resources on
+different origins, which breaks CORS on Cloudflare's challenge requests and makes
+the browser reject Discord's `__dcfduid` / `__sdcfduid` cookies as cross-site.
+
+- `GET /overlay` redirects to the *same path Streamkit uses* (`/overlay/voice/...`)
+  on this server — the SPA routes on `location.pathname`, so the path must match.
+- Any path this server does not handle is relayed upstream, with the request
+  method and body intact (Cloudflare challenges POST).
+- Upstream `Set-Cookie` headers are rewritten for a local plain-HTTP origin:
+  `Domain=` and `Secure` are dropped and `SameSite=None` becomes `Lax`.
+- `Content-Security-Policy` and `X-Frame-Options` are stripped from upstream
+  replies so the injected script runs and OBS can embed the page.
+
+### CSS injection
+
+1. Server relays the Streamkit HTML with `reqwest`
+2. Injects a `<style>` block, last in `<head>` so it wins over Streamkit's own CSS:
    - Forces a transparent background
    - Hides default avatars
    - Shows custom images for mapped `data-userid` values

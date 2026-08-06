@@ -1,8 +1,10 @@
 use crate::css::generate_overlay_css;
 use crate::proxy::{self, ProxyError};
 use crate::reload::ConfigWatcher;
+use crate::rpc;
 use axum::body::{Body, Bytes};
-use axum::extract::{Query, Request, State};
+use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::{Path, Query, RawQuery, Request, State};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
@@ -51,6 +53,8 @@ pub fn app_router(state: AppState) -> Router {
         .route("/css", get(preview_css))
         .route("/proxy", get(asset_proxy))
         .route("/reload-events", get(reload_events))
+        .route("/rpc/{port}", get(rpc_bridge))
+        .route("/rpc/{port}/", get(rpc_bridge))
         .nest_service("/assets", static_files)
         // Everything else is Streamkit's own app (scripts, images, Cloudflare
         // challenge endpoints), relayed so the browser only ever sees one origin.
@@ -86,7 +90,7 @@ async fn index(State(state): State<AppState>) -> impl IntoResponse {
   <h1>Discord Overlay Proxy</h1>
   <p>Transparent Streamkit overlay with custom avatars for TikTok Live Studio.</p>
   <ul>
-    <li><a href="/overlay"><code>/overlay</code></a> — proxied overlay</li>
+    <li><a href="/overlay"><code>/overlay</code></a> — proxied overlay (redirects to the Streamkit path)</li>
     <li><code>/overlay?target=URL</code> — override Streamkit URL</li>
     <li><a href="/css"><code>/css</code></a> — preview generated CSS</li>
     <li><code>/assets/…</code> — local images from <code>{assets}/</code></li>
@@ -234,6 +238,22 @@ async fn reload_events(
         ],
         version.to_string(),
     )
+}
+
+/// Bridge the overlay's Discord RPC websocket, which cannot be opened directly
+/// from this origin. See [`crate::rpc`] for why.
+async fn rpc_bridge(
+    ws: WebSocketUpgrade,
+    Path(port): Path<u16>,
+    RawQuery(query): RawQuery,
+) -> Result<Response, AppError> {
+    if !rpc::is_rpc_port(port) {
+        return Err(AppError::forbidden(format!(
+            "{port} is not a Discord RPC port"
+        )));
+    }
+
+    Ok(ws.on_upgrade(move |socket| rpc::relay(socket, port, query)))
 }
 
 #[derive(Debug, Deserialize)]

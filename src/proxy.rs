@@ -144,8 +144,10 @@ fn rebase_referer(value: &HeaderValue, target: &Url) -> Option<HeaderValue> {
 
 /// Make an upstream cookie storable on `http://127.0.0.1`.
 ///
-/// `Domain=.discord.com` would be rejected outright, and `Secure` /
-/// `SameSite=None` cannot survive a plain-HTTP local origin.
+/// `Domain=.discord.com` would be rejected outright, and `Secure`,
+/// `SameSite=None` and `Partitioned` cannot survive a plain-HTTP local origin —
+/// `Partitioned` in particular is dropped by the browser without `Secure`,
+/// which is what rejected Cloudflare's `cf_clearance`.
 fn localize_cookie(value: &HeaderValue) -> Option<HeaderValue> {
     let cookie = value.to_str().ok()?;
     let rewritten = cookie
@@ -153,7 +155,7 @@ fn localize_cookie(value: &HeaderValue) -> Option<HeaderValue> {
         .map(str::trim)
         .filter(|part| {
             let lower = part.to_ascii_lowercase();
-            !lower.starts_with("domain=") && lower != "secure"
+            !lower.starts_with("domain=") && lower != "secure" && lower != "partitioned"
         })
         .map(|part| {
             if part.eq_ignore_ascii_case("samesite=none") {
@@ -199,16 +201,46 @@ pub fn inject_overlay(response: &mut UpstreamResponse, config: &Config, version:
 /// against our own origin.
 fn head_injection(config: &Config, version: u64) -> String {
     let css = generate_overlay_css(&config.users);
-    let script = HOT_RELOAD_SCRIPT.replace("__VERSION__", &version.to_string());
+    let hot_reload = HOT_RELOAD_SCRIPT.replace("__VERSION__", &version.to_string());
+    let rpc_bridge = RPC_BRIDGE_SCRIPT;
 
     format!(
         r#"<style id="discord-overlay-custom" type="text/css">
 {css}
 </style>
-{script}
+{rpc_bridge}
+{hot_reload}
 "#
     )
 }
+
+/// Routes Streamkit's Discord RPC socket through this server.
+///
+/// The bundle hardcodes `new WebSocket("ws://127.0.0.1:" + port + "/?v=1…")`,
+/// and the Discord client rejects that handshake because the browser stamps it
+/// with our origin. Patching `window.WebSocket` here — before the bundle runs —
+/// sends it to `/rpc/<port>/` instead, where the server re-dials Discord with
+/// the origin it expects.
+const RPC_BRIDGE_SCRIPT: &str = r#"<script id="discord-overlay-rpc-bridge">
+(() => {
+  const Native = window.WebSocket;
+  const localSocket = /^ws:\/\/(?:127\.0\.0\.1|localhost):(\d+)\//i;
+  const Bridged = function (url, protocols) {
+    let target = String(url);
+    const match = localSocket.exec(target);
+    // Never rewrite a socket that already points at this proxy.
+    if (match && match[1] !== location.port) {
+      target = target.replace(localSocket, "ws://" + location.host + "/rpc/" + match[1] + "/");
+    }
+    return protocols === undefined ? new Native(target) : new Native(target, protocols);
+  };
+  Bridged.prototype = Native.prototype;
+  for (const key of ["CONNECTING", "OPEN", "CLOSING", "CLOSED"]) {
+    Bridged[key] = Native[key];
+  }
+  window.WebSocket = Bridged;
+})();
+</script>"#;
 
 /// Long-polls the proxy for config changes and reloads the overlay on any edit.
 /// Served from the same origin, so a relative endpoint always resolves.
