@@ -3,7 +3,7 @@ use crate::css::generate_overlay_css;
 use crate::proxy::{self, ProxyError};
 use axum::body::Body;
 use axum::extract::{Query, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
@@ -114,18 +114,15 @@ async fn overlay(
 
     let html = proxy::fetch_and_inject(&state.client, target, &state.config.users).await?;
 
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("text/html; charset=utf-8"),
-    );
-    // Allow embedding in TikTok Live Studio / OBS browser sources.
-    headers.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
-    );
-
-    Ok((StatusCode::OK, headers, html).into_response())
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            // Always re-fetch in TikTok Live Studio / OBS browser sources.
+            (header::CACHE_CONTROL, "no-store, no-cache, must-revalidate"),
+        ],
+        html,
+    )
+        .into_response())
 }
 
 async fn preview_css(State(state): State<AppState>) -> impl IntoResponse {
@@ -158,33 +155,30 @@ async fn asset_proxy(
         ));
     }
 
-    let (_upstream_headers, bytes, content_type) =
-        proxy::fetch_asset(&state.client, &query.url).await?;
+    let (bytes, content_type) = proxy::fetch_asset(&state.client, &query.url).await?;
 
-    let mut headers = HeaderMap::new();
-    if let Ok(ct) = HeaderValue::from_str(&content_type) {
-        headers.insert(header::CONTENT_TYPE, ct);
-    }
-    headers.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=300"),
-    );
-
-    Ok((StatusCode::OK, headers, Body::from(bytes)).into_response())
+    Ok((
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "public, max-age=300".to_string()),
+        ],
+        Body::from(bytes),
+    )
+        .into_response())
 }
 
+/// Domains the `/proxy` endpoint is allowed to fetch from.
+const ALLOWED_PROXY_HOSTS: [&str; 3] = ["discord.com", "discordapp.com", "discord.gg"];
+
 fn is_allowed_proxy_url(raw: &str) -> bool {
-    let Ok(url) = url::Url::parse(raw) else {
+    let Ok(url) = proxy::parse_http_url(raw) else {
         return false;
     };
-    if url.scheme() != "https" && url.scheme() != "http" {
-        return false;
-    }
-    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
-    host.ends_with("discord.com")
-        || host.ends_with("discordapp.com")
-        || host.ends_with("discord.gg")
-        || host == "cdn.discordapp.com"
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    ALLOWED_PROXY_HOSTS.iter().any(|allowed| {
+        // Exact match, or a real subdomain — not a look-alike like `evildiscord.com`.
+        host == *allowed || host.strip_suffix(allowed).is_some_and(|p| p.ends_with('.'))
+    })
 }
 
 /// Map internal errors to HTTP responses.
@@ -206,12 +200,8 @@ impl From<ProxyError> for AppError {
     fn from(err: ProxyError) -> Self {
         let status = match &err {
             ProxyError::InvalidUrl(_) | ProxyError::UnsupportedScheme => StatusCode::BAD_REQUEST,
-            ProxyError::Upstream { status, .. } if (400..500).contains(status) => {
-                StatusCode::BAD_GATEWAY
-            }
-            ProxyError::Request(_) | ProxyError::Upstream { .. } | ProxyError::InvalidUtf8 => {
-                StatusCode::BAD_GATEWAY
-            }
+            // Anything that went wrong upstream is reported as a gateway failure.
+            _ => StatusCode::BAD_GATEWAY,
         };
         Self {
             status,

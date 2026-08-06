@@ -1,8 +1,10 @@
-use crate::css::generate_overlay_css;
 use crate::config::UserMap;
-use reqwest::Client;
+use crate::css::generate_overlay_css;
+use axum::body::Bytes;
+use reqwest::{Client, Response, Url};
 use thiserror::Error;
-use url::Url;
+
+const USER_AGENT: &str = "DiscordOverlayProxy/0.1 (+https://github.com/local/discord_overlay)";
 
 #[derive(Debug, Error)]
 pub enum ProxyError {
@@ -18,35 +20,48 @@ pub enum ProxyError {
     InvalidUtf8,
 }
 
+/// Parse and validate an http(s) URL from user-controlled input.
+pub fn parse_http_url(raw: &str) -> Result<Url, ProxyError> {
+    let url = Url::parse(raw).map_err(|e| ProxyError::InvalidUrl(e.to_string()))?;
+    match url.scheme() {
+        "http" | "https" => Ok(url),
+        _ => Err(ProxyError::UnsupportedScheme),
+    }
+}
+
+/// GET `url`, returning the response only when the upstream status is a success.
+async fn get_ok(client: &Client, url: Url, accept: Option<&str>) -> Result<Response, ProxyError> {
+    let mut request = client.get(url).header("User-Agent", USER_AGENT);
+    if let Some(accept) = accept {
+        request = request.header("Accept", accept);
+    }
+
+    let response = request.send().await?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+
+    let body = response.text().await.unwrap_or_default();
+    Err(ProxyError::Upstream {
+        status: status.as_u16(),
+        body: body.chars().take(200).collect(),
+    })
+}
+
 /// Fetch the Streamkit overlay HTML and inject custom CSS into `<head>`.
 pub async fn fetch_and_inject(
     client: &Client,
     target: &str,
     users: &UserMap,
 ) -> Result<String, ProxyError> {
-    let target_url = Url::parse(target).map_err(|e| ProxyError::InvalidUrl(e.to_string()))?;
-    if target_url.scheme() != "https" && target_url.scheme() != "http" {
-        return Err(ProxyError::UnsupportedScheme);
-    }
-
-    let response = client
-        .get(target_url.clone())
-        .header(
-            "User-Agent",
-            "DiscordOverlayProxy/0.1 (+https://github.com/local/discord_overlay)",
-        )
-        .header("Accept", "text/html,application/xhtml+xml")
-        .send()
-        .await?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(ProxyError::Upstream {
-            status: status.as_u16(),
-            body: body.chars().take(200).collect(),
-        });
-    }
+    let target_url = parse_http_url(target)?;
+    let response = get_ok(
+        client,
+        target_url.clone(),
+        Some("text/html,application/xhtml+xml"),
+    )
+    .await?;
 
     let html = response.text().await.map_err(|_| ProxyError::InvalidUtf8)?;
     let css = generate_overlay_css(users);
@@ -106,41 +121,22 @@ fn inject_css_and_base(html: &str, css: &str, target_url: &Url) -> String {
 }
 
 /// Proxy a static asset from the Streamkit origin (or an absolute URL).
+///
+/// Returns the body plus the upstream `Content-Type`.
 pub async fn fetch_asset(
     client: &Client,
     asset_url: &str,
-) -> Result<(reqwest::header::HeaderMap, bytes::Bytes, String), ProxyError> {
-    let url = Url::parse(asset_url).map_err(|e| ProxyError::InvalidUrl(e.to_string()))?;
-    if url.scheme() != "https" && url.scheme() != "http" {
-        return Err(ProxyError::UnsupportedScheme);
-    }
+) -> Result<(Bytes, String), ProxyError> {
+    let response = get_ok(client, parse_http_url(asset_url)?, None).await?;
 
-    let response = client
-        .get(url)
-        .header(
-            "User-Agent",
-            "DiscordOverlayProxy/0.1 (+https://github.com/local/discord_overlay)",
-        )
-        .send()
-        .await?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        return Err(ProxyError::Upstream {
-            status: status.as_u16(),
-            body: body.chars().take(200).collect(),
-        });
-    }
-
-    let headers = response.headers().clone();
-    let content_type = headers
+    let content_type = response
+        .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_string();
     let bytes = response.bytes().await?;
-    Ok((headers, bytes, content_type))
+    Ok((bytes, content_type))
 }
 
 #[cfg(test)]
