@@ -1,0 +1,28 @@
+# Discord Overlay Proxy configuration
+# Copy / edit this file, then: cargo run
+# Optional: cargo run -- path/to/other-config.toml
+
+[server]
+host = "127.0.0.1"
+port = 3000
+
+[streamkit]
+# Paste your full Discord Streamkit voice overlay URL here.
+# Streamkit → Install for Developer → copy the voice widget link.
+# Example shape (replace with yours):
+#   https://streamkit.discord.com/overlay/voice?server=SERVER_ID&channel=CHANNEL_ID
+url = "https://streamkit.discord.com/overlay/voice?server=YOUR_SERVER_ID&channel=YOUR_CHANNEL_ID"
+
+# Map Discord user snowflakes to idle / speaking image URLs.
+# Right-click user in Discord (Developer Mode) → Copy User ID.
+#
+# [users.123456789012345678]
+# idle_url = "https://example.com/avatars/alice-idle.png"
+# speaking_url = "https://example.com/avatars/alice-speaking.png"
+#
+# Or use local files served by any static host / file server:
+# idle_url = "http://127.0.0.1:3000/..."  (add a static route later if needed)
+
+[users.000000000000000000]
+idle_url = "https://cdn.discordapp.com/embed/avatars/0.png"
+speaking_url = "https://cdn.discordapp.com/embed/avatars/1.png"

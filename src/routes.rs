@@ -1,0 +1,207 @@
+use crate::config::Config;
+use crate::css::generate_overlay_css;
+use crate::proxy::{self, ProxyError};
+use axum::body::Body;
+use axum::extract::{Query, State};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::get;
+use axum::Router;
+use reqwest::Client;
+use serde::Deserialize;
+use std::sync::Arc;
+use tower_http::cors::{Any, CorsLayer};
+use tower_http::trace::TraceLayer;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub config: Arc<Config>,
+    pub client: Client,
+}
+
+pub fn app_router(state: AppState) -> Router {
+    Router::new()
+        .route("/", get(index))
+        .route("/health", get(health))
+        .route("/overlay", get(overlay))
+        .route("/css", get(preview_css))
+        .route("/proxy", get(asset_proxy))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
+}
+
+async fn index() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Discord Overlay Proxy</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+    code { background: #f4f4f4; padding: 0.1em 0.35em; border-radius: 4px; }
+    a { color: #5865f2; }
+  </style>
+</head>
+<body>
+  <h1>Discord Overlay Proxy</h1>
+  <p>Transparent Streamkit overlay with custom avatars for TikTok Live Studio.</p>
+  <ul>
+    <li><a href="/overlay"><code>/overlay</code></a> — proxied overlay (uses <code>config.toml</code> Streamkit URL)</li>
+    <li><code>/overlay?target=URL</code> — override Streamkit URL for this request</li>
+    <li><a href="/css"><code>/css</code></a> — preview generated CSS</li>
+    <li><a href="/health"><code>/health</code></a> — liveness check</li>
+  </ul>
+</body>
+</html>"#,
+    )
+}
+
+async fn health() -> impl IntoResponse {
+    (StatusCode::OK, "ok")
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OverlayQuery {
+    /// Optional override for the Streamkit URL from config.
+    pub target: Option<String>,
+}
+
+async fn overlay(
+    State(state): State<AppState>,
+    Query(query): Query<OverlayQuery>,
+) -> Result<Response, AppError> {
+    let target = query
+        .target
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(state.config.streamkit.url.as_str());
+
+    tracing::info!(%target, "fetching streamkit overlay");
+
+    let html = proxy::fetch_and_inject(&state.client, target, &state.config.users).await?;
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    // Allow embedding in TikTok Live Studio / OBS browser sources.
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
+
+    Ok((StatusCode::OK, headers, html).into_response())
+}
+
+async fn preview_css(State(state): State<AppState>) -> impl IntoResponse {
+    let css = generate_overlay_css(&state.config.users);
+    (
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        css,
+    )
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProxyQuery {
+    /// Absolute URL of the asset to fetch.
+    pub url: String,
+}
+
+/// Optional asset proxy for cases where relative rewriting is not enough
+/// (e.g. mixed-content or CORS edge cases).
+/// Usage: `/proxy?url=https://streamkit.discord.com/...`
+async fn asset_proxy(
+    State(state): State<AppState>,
+    Query(query): Query<ProxyQuery>,
+) -> Result<Response, AppError> {
+    if !is_allowed_proxy_url(&query.url) {
+        return Err(AppError::forbidden(
+            "proxy only allows discord streamkit / cdn hosts".into(),
+        ));
+    }
+
+    let (_upstream_headers, bytes, content_type) =
+        proxy::fetch_asset(&state.client, &query.url).await?;
+
+    let mut headers = HeaderMap::new();
+    if let Ok(ct) = HeaderValue::from_str(&content_type) {
+        headers.insert(header::CONTENT_TYPE, ct);
+    }
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=300"),
+    );
+
+    Ok((StatusCode::OK, headers, Body::from(bytes)).into_response())
+}
+
+fn is_allowed_proxy_url(raw: &str) -> bool {
+    let Ok(url) = url::Url::parse(raw) else {
+        return false;
+    };
+    if url.scheme() != "https" && url.scheme() != "http" {
+        return false;
+    }
+    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    host.ends_with("discord.com")
+        || host.ends_with("discordapp.com")
+        || host.ends_with("discord.gg")
+        || host == "cdn.discordapp.com"
+}
+
+/// Map internal errors to HTTP responses.
+pub struct AppError {
+    status: StatusCode,
+    message: String,
+}
+
+impl AppError {
+    fn forbidden(message: String) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            message,
+        }
+    }
+}
+
+impl From<ProxyError> for AppError {
+    fn from(err: ProxyError) -> Self {
+        let status = match &err {
+            ProxyError::InvalidUrl(_) | ProxyError::UnsupportedScheme => StatusCode::BAD_REQUEST,
+            ProxyError::Upstream { status, .. } if (400..500).contains(status) => {
+                StatusCode::BAD_GATEWAY
+            }
+            ProxyError::Request(_) | ProxyError::Upstream { .. } | ProxyError::InvalidUtf8 => {
+                StatusCode::BAD_GATEWAY
+            }
+        };
+        Self {
+            status,
+            message: err.to_string(),
+        }
+    }
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        tracing::warn!(status = %self.status, error = %self.message, "request failed");
+        (
+            self.status,
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            self.message,
+        )
+            .into_response()
+    }
+}
