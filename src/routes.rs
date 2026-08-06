@@ -253,7 +253,17 @@ async fn rpc_bridge(
         )));
     }
 
-    Ok(ws.on_upgrade(move |socket| rpc::relay(socket, port, query)))
+    // Connect first, so a port with no Discord behind it fails the upgrade
+    // instead of opening a socket that immediately closes.
+    let discord = rpc::connect(port, query).await.map_err(|err| {
+        tracing::debug!(port, %err, "no Discord client on this RPC port");
+        AppError {
+            status: StatusCode::BAD_GATEWAY,
+            message: format!("no Discord RPC client on port {port}: {err}"),
+        }
+    })?;
+
+    Ok(ws.on_upgrade(move |socket| rpc::pump(socket, discord)))
 }
 
 #[derive(Debug, Deserialize)]

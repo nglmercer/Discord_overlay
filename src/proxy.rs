@@ -189,7 +189,9 @@ pub fn inject_overlay(response: &mut UpstreamResponse, config: &Config, version:
         return;
     };
 
-    let injected = inject_head(html, &head_injection(config, version));
+    // The RPC bridge must patch `window.WebSocket` before Streamkit's bundle
+    // runs, so it goes first; the CSS goes last to win the cascade.
+    let injected = inject_head(html, RPC_BRIDGE_SCRIPT, &head_injection(config, version));
     response.body = Bytes::from(injected);
 }
 
@@ -202,13 +204,11 @@ pub fn inject_overlay(response: &mut UpstreamResponse, config: &Config, version:
 fn head_injection(config: &Config, version: u64) -> String {
     let css = generate_overlay_css(&config.users);
     let hot_reload = HOT_RELOAD_SCRIPT.replace("__VERSION__", &version.to_string());
-    let rpc_bridge = RPC_BRIDGE_SCRIPT;
 
     format!(
         r#"<style id="discord-overlay-custom" type="text/css">
 {css}
 </style>
-{rpc_bridge}
 {hot_reload}
 "#
     )
@@ -267,27 +267,35 @@ const HOT_RELOAD_SCRIPT: &str = r#"<script id="discord-overlay-hotreload">
 })();
 </script>"#;
 
-/// Splice `injection` in just before `</head>`, tolerating malformed documents.
-fn inject_head(html: &str, injection: &str) -> String {
+/// Splice `early` in right after `<head>` and `late` in just before `</head>`,
+/// tolerating documents that are missing either tag.
+fn inject_head(html: &str, early: &str, late: &str) -> String {
     let lower = html.to_ascii_lowercase();
+    let head_start = head_open_end(&lower);
+    let head_end = lower.find("</head>");
 
-    // Last thing in the head, so our CSS wins over Streamkit's stylesheets.
-    let insert_at = match lower.find("</head>") {
-        Some(idx) => idx,
-        None => match head_open_end(&lower) {
-            Some(idx) => idx,
-            None => {
-                return format!(
-                    "<!DOCTYPE html>\n<html>\n<head>\n{injection}</head>\n<body>\n{html}\n</body>\n</html>"
-                )
-            }
-        },
-    };
-
-    let mut out = String::with_capacity(html.len() + injection.len());
-    out.push_str(&html[..insert_at]);
-    out.push_str(injection);
-    out.push_str(&html[insert_at..]);
+    let mut out = String::with_capacity(html.len() + early.len() + late.len());
+    match (head_start, head_end) {
+        (Some(start), Some(end)) if start <= end => {
+            out.push_str(&html[..start]);
+            out.push_str(early);
+            out.push_str(&html[start..end]);
+            out.push_str(late);
+            out.push_str(&html[end..]);
+        }
+        // Only one anchor to work with: keep the injections together there.
+        (Some(at), _) | (None, Some(at)) => {
+            out.push_str(&html[..at]);
+            out.push_str(early);
+            out.push_str(late);
+            out.push_str(&html[at..]);
+        }
+        (None, None) => {
+            return format!(
+                "<!DOCTYPE html>\n<html>\n<head>\n{early}{late}</head>\n<body>\n{html}\n</body>\n</html>"
+            )
+        }
+    }
     out
 }
 
@@ -322,19 +330,36 @@ mod tests {
     }
 
     #[test]
-    fn injects_before_closing_head() {
-        let html = "<!DOCTYPE html><html><head><title>t</title></head><body>ok</body></html>";
-        let out = inject_head(html, "<style>body{color:red}</style>");
-        let lower = out.to_ascii_lowercase();
-        assert!(lower.find("color:red").unwrap() < lower.find("</head>").unwrap());
+    fn early_lands_after_head_open_and_late_before_head_close() {
+        // Mirrors Streamkit's real document: the bundle is already in <head>.
+        let html = concat!(
+            "<!doctype html><html><head><title>t</title>",
+            r#"<script defer src="/static/js/main.js"></script>"#,
+            "</head><body>ok</body></html>"
+        );
+        let out = inject_head(html, "<!--EARLY-->", "<!--LATE-->");
+        let early = out.find("<!--EARLY-->").unwrap();
+        let late = out.find("<!--LATE-->").unwrap();
+
+        assert!(early < out.find("<title>").unwrap(), "early must precede the bundle");
+        assert!(early < out.find("main.js").unwrap());
+        assert!(late > out.find("main.js").unwrap());
+        assert!(late < out.find("</head>").unwrap());
     }
 
     #[test]
     fn injects_after_head_open_when_unclosed() {
         let html = "<html><head><title>t</title><body>ok";
-        let out = inject_head(html, "<style>x</style>");
-        let lower = out.to_ascii_lowercase();
-        assert!(lower.find("<style>").unwrap() < lower.find("<title>").unwrap());
+        let out = inject_head(html, "<!--EARLY-->", "<!--LATE-->");
+        assert!(out.find("<!--EARLY-->").unwrap() < out.find("<title>").unwrap());
+        assert!(out.find("<!--LATE-->").unwrap() < out.find("<title>").unwrap());
+    }
+
+    #[test]
+    fn builds_a_document_when_there_is_no_head() {
+        let out = inject_head("just text", "<!--EARLY-->", "<!--LATE-->");
+        assert!(out.contains("<!--EARLY--><!--LATE-->"));
+        assert!(out.contains("just text"));
     }
 
     #[test]
