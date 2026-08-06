@@ -35,6 +35,21 @@ dir = "assets"
 # speaking_url = "https://example.com/avatars/alice-speaking.png"
 
 [users.747586531123789954]
-order = 1
 idle_url = "https://cdn.discordapp.com/attachments/962165499834290196/1535036361177038878/zetarias-a.png?ex=6a764d84&is=6a74fc04&hm=3b0fb60f74b3e92a8562c58462a35eebe500aa3dbff81f20da6861b6772614b3&"
 speaking_url = "https://cdn.discordapp.com/attachments/962165499834290196/1535036361562656971/zetarias-b.png?ex=6a764d84&is=6a74fc04&hm=34efe0591f9fa0a93ff2abdca577a0a022d77db701206a927325cbe9a7c0b531&"
+
+[users.1328591181168246806]
+idle_url = "https://cdn.discordapp.com/attachments/962165499834290196/1535036361915236372/gatoxa-a.png?ex=6a764d84&is=6a74fc04&hm=902207b49a543bc6e8dfe072f4ddeb711fbaff2d56f8c691ebcdb1f076e9e7d5&"
+speaking_url = "https://cdn.discordapp.com/attachments/962165499834290196/1535036362313568376/gatoxa-b.png?ex=6a764d84&is=6a74fc04&hm=fe56b6215b391be4917e537aab36511bea050ea8288e9dd7b17338d27321b026&"
+
+[users.1107816448035917854]
+idle_url = "https://cdn.discordapp.com/attachments/962165499834290196/1535036364440076511/nash-a.png?ex=6a764d84&is=6a74fc04&hm=46790e19f0e3b0a2611131ebea3f4a2a0a4c11f70064d377e20b36949283b885&"
+speaking_url = "https://media.discordapp.net/attachments/962165499834290196/1535036360769933342/nash-b.png?ex=6a764d84&is=6a74fc04&hm=a6f5e89790ec3c1648248593ed9f3bcd8dc2dcd232b4c833c35fdcf0cef2be51&=&format=webp&quality=lossless"
+
+[users.1476219183388819640]
+idle_url = "https://cdn.discordapp.com/attachments/962165499834290196/1535036363030921277/Lucky-a.png?ex=6a764d84&is=6a74fc04&hm=787be1f30b2c7919236e56ae171c923f1cb54e617df3285dad403b79b0649b97&"
+speaking_url = "https://cdn.discordapp.com/attachments/962165499834290196/1535036363370401995/Lucky-b.png?ex=6a764d84&is=6a74fc04&hm=4b8560a1ec661deb46e242559035a02915b1ba1c87828d16faf34f22cb489fda&"
+
+[users.617880362789634060]
+idle_url = "https://cdn.discordapp.com/attachments/962165499834290196/1535036363680907385/melser-a.png?ex=6a764d84&is=6a74fc04&hm=5ff606a5fe95e7dc9e8e499ce537982b854cdbf853565ba5bac76059c53314fc&"
+speaking_url = "https://cdn.discordapp.com/attachments/962165499834290196/1535036364108857456/melser-b.png?ex=6a764d84&is=6a74fc04&hm=9b9ba22fdbf3506745311c5166e150fdc07ed4ac031f9312e1e026be755aad2d&"
