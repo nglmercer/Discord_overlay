@@ -31,6 +31,37 @@ Optional config path:
 cargo run -- ./my-config.toml
 ```
 
+## Standalone builds
+
+Build artifacts are written to `dist/` with the files they need beside each
+executable:
+
+```text
+dist/
+  discord_overlay-linux-x86_64
+  config.toml
+  README.md
+  assets/
+```
+
+Run a standalone build from its folder, edit the copied `config.toml`, and then
+start the executable:
+
+```bash
+cd dist
+./discord_overlay-linux-x86_64
+```
+
+If the implicit `config.toml` is missing, the executable creates it from the
+bundled default beside the executable without overwriting an existing file.
+An existing `config.toml` in the working directory still takes precedence. This
+makes a binary copied by itself to another folder usable on its first run. An
+explicitly provided path is never created automatically:
+
+```bash
+./discord_overlay-linux-x86_64 ./my-config.toml
+```
+
 ## Configuration
 
 `config.toml` holds:

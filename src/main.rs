@@ -19,10 +19,20 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config_path = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("config.toml"));
+    let (config_path, created_default) = match std::env::args().nth(1) {
+        Some(path) => (PathBuf::from(path), false),
+        None => {
+            let path = implicit_config_path()?;
+            (path.clone(), Config::ensure_default(&path)?)
+        }
+    };
+
+    if created_default {
+        tracing::info!(
+            path = %config_path.display(),
+            "created default configuration — edit this file to set your Streamkit URL"
+        );
+    }
 
     let config = Config::load(&config_path)?;
     tracing::info!(
@@ -60,4 +70,23 @@ async fn main() -> anyhow::Result<()> {
 
     axum::serve(listener, app_router(state)).await?;
     Ok(())
+}
+
+/// Keep the working-directory behavior for existing projects, but make a
+/// binary copied by itself self-contained when launched from another folder.
+fn implicit_config_path() -> anyhow::Result<PathBuf> {
+    let working_directory_config = PathBuf::from("config.toml");
+    if working_directory_config.exists() {
+        return Ok(working_directory_config);
+    }
+
+    let executable = std::env::current_exe()
+        .map_err(|error| anyhow::anyhow!("failed to locate executable: {error}"))?;
+    let directory = executable.parent().ok_or_else(|| {
+        anyhow::anyhow!(
+            "failed to determine the executable directory from {}",
+            executable.display()
+        )
+    })?;
+    Ok(directory.join("config.toml"))
 }

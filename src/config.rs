@@ -1,6 +1,12 @@
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+
+/// Configuration copied into a standalone release on first run when no
+/// implicit `config.toml` is available.
+pub const DEFAULT_CONFIG: &str = include_str!("../config.toml");
 
 /// Idle and speaking avatar image paths/URLs for a single Discord user.
 ///
@@ -77,6 +83,32 @@ fn default_assets_dir() -> PathBuf {
 }
 
 impl Config {
+    /// Create the bundled configuration without replacing an existing file.
+    ///
+    /// `create_new` also makes startup safe if two launches race to create the
+    /// file: the second launch simply loads the file created by the first one.
+    pub fn ensure_default(path: impl AsRef<Path>) -> anyhow::Result<bool> {
+        let path = path.as_ref();
+        let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "failed to create default config at {}: {error}",
+                    path.display()
+                ));
+            }
+        };
+
+        file.write_all(DEFAULT_CONFIG.as_bytes()).map_err(|error| {
+            anyhow::anyhow!(
+                "failed to write default config at {}: {error}",
+                path.display()
+            )
+        })?;
+        Ok(true)
+    }
+
     /// Load configuration from a TOML file and resolve local image paths.
     pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let path = path.as_ref();
@@ -188,5 +220,12 @@ mod tests {
             resolve_asset_ref("./chars/me/idle.png", base),
             "http://127.0.0.1:3000/assets/chars/me/idle.png"
         );
+    }
+
+    #[test]
+    fn bundled_default_config_is_valid() {
+        let config: Config = toml::from_str(DEFAULT_CONFIG).expect("default config must be valid");
+        assert_eq!(config.server.port, 3000);
+        assert!(!config.streamkit.url.is_empty());
     }
 }
