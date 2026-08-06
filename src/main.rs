@@ -1,12 +1,13 @@
 mod config;
 mod css;
 mod proxy;
+mod reload;
 mod routes;
 
 use config::Config;
+use reload::ConfigWatcher;
 use routes::{app_router, AppState};
 use std::path::PathBuf;
-use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -41,16 +42,20 @@ async fn main() -> anyhow::Result<()> {
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
 
-    let state = AppState {
-        config: Arc::new(config.clone()),
-        client,
-    };
-
     let addr = config.bind_addr();
+    let watcher = ConfigWatcher::new(config_path.clone(), config);
+    tokio::spawn(watcher.clone().watch());
+
+    let state = AppState { watcher, client };
+
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!(%addr, "discord overlay proxy listening");
     tracing::info!("overlay → http://{addr}/overlay");
     tracing::info!("local images → http://{addr}/assets/<file>  (from ./assets/)");
+    tracing::info!(
+        path = %config_path.display(),
+        "hot reload active — saving the config refreshes open overlays"
+    );
 
     axum::serve(listener, app_router(state)).await?;
     Ok(())

@@ -1,4 +1,4 @@
-use crate::config::UserMap;
+use crate::config::Config;
 use crate::css::generate_overlay_css;
 use axum::body::Bytes;
 use reqwest::{Client, Response, Url};
@@ -53,7 +53,8 @@ async fn get_ok(client: &Client, url: Url, accept: Option<&str>) -> Result<Respo
 pub async fn fetch_and_inject(
     client: &Client,
     target: &str,
-    users: &UserMap,
+    config: &Config,
+    version: u64,
 ) -> Result<String, ProxyError> {
     let target_url = parse_http_url(target)?;
     let response = get_ok(
@@ -64,37 +65,76 @@ pub async fn fetch_and_inject(
     .await?;
 
     let html = response.text().await.map_err(|_| ProxyError::InvalidUtf8)?;
-    let css = generate_overlay_css(users);
-    Ok(inject_css_and_base(&html, &css, &target_url))
+    Ok(inject_head(&html, &head_injection(config, version, &target_url)))
 }
 
-/// Inject a `<base href>` (so relative assets resolve to Streamkit) and our
-/// custom `<style>` block into the document head.
-fn inject_css_and_base(html: &str, css: &str, target_url: &Url) -> String {
-    let mut base = target_url.clone();
-    base.set_path("/");
-    base.set_query(None);
-    base.set_fragment(None);
+/// Everything we splice into the Streamkit document head: a `<base href>` so
+/// relative assets still resolve upstream, the generated avatar CSS, and the
+/// watcher script that reloads the page when `config.toml` changes.
+fn head_injection(config: &Config, version: u64, target_url: &Url) -> String {
+    let mut origin = target_url.clone();
+    origin.set_path("/");
+    origin.set_query(None);
+    origin.set_fragment(None);
 
     // Prefer origin + directory of the overlay page for relative resolution.
     let base_href = target_url
         .join("./")
         .map(|u| u.to_string())
-        .unwrap_or_else(|_| base.to_string());
+        .unwrap_or_else(|_| origin.to_string());
 
-    let injection = format!(
+    let css = generate_overlay_css(&config.users);
+    let script = HOT_RELOAD_SCRIPT
+        .replace(
+            "__ENDPOINT__",
+            &format!(
+                "{}/reload-events",
+                config.public_base_url().trim_end_matches('/')
+            ),
+        )
+        .replace("__VERSION__", &version.to_string());
+
+    format!(
         r#"<base href="{base_href}">
 <style id="discord-overlay-custom" type="text/css">
 {css}
 </style>
+{script}
 "#
-    );
+    )
+}
 
+/// Long-polls the proxy for config changes and reloads the overlay on any edit.
+const HOT_RELOAD_SCRIPT: &str = r#"<script id="discord-overlay-hotreload">
+(() => {
+  const endpoint = "__ENDPOINT__";
+  const version = __VERSION__;
+  const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+  (async () => {
+    for (;;) {
+      try {
+        const res = await fetch(endpoint + "?since=" + version, { cache: "no-store" });
+        const next = Number(await res.text());
+        if (Number.isFinite(next) && next !== version) {
+          location.reload();
+          return;
+        }
+      } catch (err) {
+        // Proxy restarting or unreachable — back off and keep trying.
+        await sleep(2000);
+      }
+    }
+  })();
+})();
+</script>"#;
+
+/// Splice `injection` into the document head, tolerating malformed documents.
+fn inject_head(html: &str, injection: &str) -> String {
     // Insert before </head> when present; otherwise prepend a minimal head.
     if let Some(idx) = html.to_ascii_lowercase().find("</head>") {
         let mut out = String::with_capacity(html.len() + injection.len());
         out.push_str(&html[..idx]);
-        out.push_str(&injection);
+        out.push_str(injection);
         out.push_str(&html[idx..]);
         out
     } else if let Some(idx) = html.to_ascii_lowercase().find("<head>") {
@@ -102,7 +142,7 @@ fn inject_css_and_base(html: &str, css: &str, target_url: &Url) -> String {
         let mut out = String::with_capacity(html.len() + injection.len());
         out.push_str(&html[..insert_at]);
         out.push('\n');
-        out.push_str(&injection);
+        out.push_str(injection);
         out.push_str(&html[insert_at..]);
         out
     } else {
@@ -143,17 +183,39 @@ pub async fn fetch_asset(
 mod tests {
     use super::*;
 
+    use crate::config::{AssetsConfig, ServerConfig, StreamkitConfig};
+
+    fn test_config() -> Config {
+        Config {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 3000,
+            },
+            streamkit: StreamkitConfig {
+                url: "https://streamkit.discord.com/overlay/voice".to_string(),
+            },
+            assets: AssetsConfig::default(),
+            users: Default::default(),
+        }
+    }
+
     #[test]
-    fn injects_style_before_closing_head() {
+    fn injects_before_closing_head() {
         let html = "<!DOCTYPE html><html><head><title>t</title></head><body>ok</body></html>";
-        let url = Url::parse("https://streamkit.discord.com/overlay/voice?x=1").unwrap();
-        let out = inject_css_and_base(html, "body{color:red}", &url);
-        assert!(out.contains(r#"id="discord-overlay-custom""#));
+        let out = inject_head(html, "<style>body{color:red}</style>");
         assert!(out.contains("body{color:red}"));
-        assert!(out.contains("<base href="));
         let lower = out.to_ascii_lowercase();
-        let style_pos = lower.find("discord-overlay-custom").unwrap();
-        let head_close = lower.find("</head>").unwrap();
-        assert!(style_pos < head_close);
+        assert!(lower.find("color:red").unwrap() < lower.find("</head>").unwrap());
+    }
+
+    #[test]
+    fn injection_carries_base_css_and_hot_reload() {
+        let url = Url::parse("https://streamkit.discord.com/overlay/voice?x=1").unwrap();
+        let out = head_injection(&test_config(), 7, &url);
+        assert!(out.contains(r#"id="discord-overlay-custom""#));
+        assert!(out.contains(r#"<base href="https://streamkit.discord.com/overlay/""#));
+        assert!(out.contains("http://127.0.0.1:3000/reload-events"));
+        assert!(out.contains("const version = 7;"));
+        assert!(!out.contains("__ENDPOINT__"));
     }
 }

@@ -1,6 +1,6 @@
-use crate::config::Config;
 use crate::css::generate_overlay_css;
 use crate::proxy::{self, ProxyError};
+use crate::reload::ConfigWatcher;
 use axum::body::Body;
 use axum::extract::{Query, State};
 use axum::http::{header, StatusCode};
@@ -10,19 +10,25 @@ use axum::Router;
 use reqwest::Client;
 use serde::Deserialize;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::time::Duration;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 
+/// How long a `/reload-events` request parks before answering with the
+/// unchanged version. Short enough to survive proxies and browser timeouts.
+const RELOAD_POLL_TIMEOUT: Duration = Duration::from_secs(25);
+
 #[derive(Clone)]
 pub struct AppState {
-    pub config: Arc<Config>,
+    pub watcher: ConfigWatcher,
     pub client: Client,
 }
 
 pub fn app_router(state: AppState) -> Router {
-    let assets_dir: PathBuf = state.config.assets.dir.clone();
+    // The assets mount is fixed at startup; changing `assets.dir` in
+    // config.toml needs a restart, everything else hot-reloads.
+    let assets_dir: PathBuf = state.watcher.config().assets.dir.clone();
     if !assets_dir.exists() {
         tracing::warn!(
             dir = %assets_dir.display(),
@@ -41,6 +47,7 @@ pub fn app_router(state: AppState) -> Router {
         .route("/overlay", get(overlay))
         .route("/css", get(preview_css))
         .route("/proxy", get(asset_proxy))
+        .route("/reload-events", get(reload_events))
         .nest_service("/assets", static_files)
         .layer(
             CorsLayer::new()
@@ -53,8 +60,9 @@ pub fn app_router(state: AppState) -> Router {
 }
 
 async fn index(State(state): State<AppState>) -> impl IntoResponse {
-    let assets = state.config.assets.dir.display();
-    let base = state.config.public_base_url();
+    let config = state.watcher.config();
+    let assets = config.assets.dir.display();
+    let base = config.public_base_url();
     let body = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -78,6 +86,11 @@ async fn index(State(state): State<AppState>) -> impl IntoResponse {
     <li><code>/assets/…</code> — local images from <code>{assets}/</code></li>
     <li><a href="/health"><code>/health</code></a> — liveness</li>
   </ul>
+  <h2>Hot reload</h2>
+  <p>Save <code>config.toml</code> and every open <code>/overlay</code> (OBS / TikTok Live Studio
+  browser sources included) refreshes itself within a second. A config with a syntax error is
+  ignored and the previous one stays live, so the overlay never goes blank.</p>
+  <p>Changing <code>assets.dir</code> is the one setting that still needs a restart.</p>
   <h2>Local images</h2>
   <p>Drop files in <code>{assets}/</code>, then reference them in <code>config.toml</code>:</p>
   <pre>[users.YOUR_DISCORD_ID]
@@ -104,15 +117,17 @@ async fn overlay(
     State(state): State<AppState>,
     Query(query): Query<OverlayQuery>,
 ) -> Result<Response, AppError> {
+    let config = state.watcher.config();
     let target = query
         .target
         .as_deref()
         .filter(|s| !s.is_empty())
-        .unwrap_or(state.config.streamkit.url.as_str());
+        .unwrap_or(config.streamkit.url.as_str());
 
     tracing::info!(%target, "fetching streamkit overlay");
 
-    let html = proxy::fetch_and_inject(&state.client, target, &state.config.users).await?;
+    let html =
+        proxy::fetch_and_inject(&state.client, target, &config, state.watcher.version()).await?;
 
     Ok((
         [
@@ -126,13 +141,39 @@ async fn overlay(
 }
 
 async fn preview_css(State(state): State<AppState>) -> impl IntoResponse {
-    let css = generate_overlay_css(&state.config.users);
+    let css = generate_overlay_css(&state.watcher.config().users);
     (
         [
             (header::CONTENT_TYPE, "text/css; charset=utf-8"),
             (header::CACHE_CONTROL, "no-store"),
         ],
         css,
+    )
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReloadQuery {
+    /// Config version the overlay page was rendered with.
+    #[serde(default)]
+    pub since: u64,
+}
+
+/// Long-poll endpoint driving hot reload: parks until `config.toml` changes,
+/// then answers with the new version so the overlay can refresh itself.
+async fn reload_events(
+    State(state): State<AppState>,
+    Query(query): Query<ReloadQuery>,
+) -> impl IntoResponse {
+    let version = state
+        .watcher
+        .wait_for_change(query.since, RELOAD_POLL_TIMEOUT)
+        .await;
+    (
+        [
+            (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        version.to_string(),
     )
 }
 
