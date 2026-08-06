@@ -88,6 +88,7 @@ You can still use full remote URLs (`https://…`) if the image is hosted elsewh
 | `GET /proxy?url=...` | Optional asset proxy (Discord hosts only) |
 | `GET /health` | Liveness |
 | `GET /reload-events?since=N` | Hot-reload long poll (used by the injected script) |
+| `GET /rpc/{port}` | WebSocket bridge to the local Discord client (6463-6472) |
 | `ANY /*` | Reverse-proxied to the Streamkit origin |
 
 ## Hot reload
@@ -125,6 +126,23 @@ the browser reject Discord's `__dcfduid` / `__sdcfduid` cookies as cross-site.
 - `Content-Security-Policy` and `X-Frame-Options` are stripped from upstream
   replies so the injected script runs and OBS can embed the page.
 
+### The Discord RPC websocket
+
+The overlay does not get its voice data from Streamkit — its bundle opens
+`ws://127.0.0.1:<port>` straight to the **Discord desktop app** (ports
+6463-6472). That socket checks the handshake's `Origin` against Discord's own
+allowlist, and a browser will always stamp it with the page's real origin, so a
+page served from `127.0.0.1:3000` is closed with `4001 Invalid Origin`.
+
+The fix is a bridge: an injected script patches `window.WebSocket` — before the
+bundle runs — to point those URLs at `/rpc/<port>/` on this server, and the
+server dials Discord itself with `Origin: https://streamkit.discord.com`.
+
+The bridge connects to Discord *before* accepting the browser's upgrade, so the
+overlay's port scan still sees a plain connection failure on ports where no
+Discord is listening. **Discord must be running** for the overlay to show
+anyone.
+
 ### CSS injection
 
 1. Server relays the Streamkit HTML with `reqwest`
@@ -144,6 +162,7 @@ src/
   css.rs       # CSS generator
   proxy.rs     # fetch HTML / assets + inject
   reload.rs    # config.toml watcher + hot-reload signal
+  rpc.rs       # websocket bridge to the local Discord client
   routes.rs    # Axum routes
 config.toml    # local settings (edit me)
 ```

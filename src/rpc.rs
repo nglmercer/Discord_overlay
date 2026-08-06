@@ -87,6 +87,34 @@ pub async fn pump(browser: WebSocket, discord: DiscordSocket) {
     let _ = browser_tx.close().await;
 }
 
+fn to_upstream(message: Message) -> UpstreamMessage {
+    match message {
+        Message::Text(text) => UpstreamMessage::Text(text.as_str().into()),
+        Message::Binary(data) => UpstreamMessage::Binary(data),
+        Message::Ping(data) => UpstreamMessage::Ping(data),
+        Message::Pong(data) => UpstreamMessage::Pong(data),
+        Message::Close(frame) => UpstreamMessage::Close(frame.map(|frame| UpstreamCloseFrame {
+            code: CloseCode::from(frame.code),
+            reason: frame.reason.as_str().into(),
+        })),
+    }
+}
+
+/// `None` for frames tungstenite handles internally and axum cannot represent.
+fn to_browser(message: UpstreamMessage) -> Option<Message> {
+    Some(match message {
+        UpstreamMessage::Text(text) => Message::Text(text.as_str().into()),
+        UpstreamMessage::Binary(data) => Message::Binary(data),
+        UpstreamMessage::Ping(data) => Message::Ping(data),
+        UpstreamMessage::Pong(data) => Message::Pong(data),
+        UpstreamMessage::Close(frame) => Message::Close(frame.map(|frame| CloseFrame {
+            code: frame.code.into(),
+            reason: frame.reason.as_str().into(),
+        })),
+        UpstreamMessage::Frame(_) => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,6 +123,8 @@ mod tests {
 
     /// Stand-in for the Discord client: records the handshake `Origin`, then
     /// echoes one message back.
+    // The large `Err` is tungstenite's own handshake response type.
+    #[allow(clippy::result_large_err)]
     async fn fake_discord(listener: TcpListener, seen_origin: oneshot::Sender<Option<String>>) {
         let (stream, _) = listener.accept().await.unwrap();
         let mut origin = None;
@@ -157,32 +187,4 @@ mod tests {
         assert_eq!(echoed, UpstreamMessage::Text("hello".into()));
         assert_eq!(origin_rx.await.unwrap().as_deref(), Some(RPC_ORIGIN));
     }
-}
-
-fn to_upstream(message: Message) -> UpstreamMessage {
-    match message {
-        Message::Text(text) => UpstreamMessage::Text(text.as_str().into()),
-        Message::Binary(data) => UpstreamMessage::Binary(data),
-        Message::Ping(data) => UpstreamMessage::Ping(data),
-        Message::Pong(data) => UpstreamMessage::Pong(data),
-        Message::Close(frame) => UpstreamMessage::Close(frame.map(|frame| UpstreamCloseFrame {
-            code: CloseCode::from(frame.code),
-            reason: frame.reason.as_str().into(),
-        })),
-    }
-}
-
-/// `None` for frames tungstenite handles internally and axum cannot represent.
-fn to_browser(message: UpstreamMessage) -> Option<Message> {
-    Some(match message {
-        UpstreamMessage::Text(text) => Message::Text(text.as_str().into()),
-        UpstreamMessage::Binary(data) => Message::Binary(data),
-        UpstreamMessage::Ping(data) => Message::Ping(data),
-        UpstreamMessage::Pong(data) => Message::Pong(data),
-        UpstreamMessage::Close(frame) => Message::Close(frame.map(|frame| CloseFrame {
-            code: frame.code.into(),
-            reason: frame.reason.as_str().into(),
-        })),
-        UpstreamMessage::Frame(_) => return None,
-    })
 }

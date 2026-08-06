@@ -6,6 +6,13 @@ pub fn generate_overlay_css(users: &UserMap) -> String {
 
     css.push_str(
         r#"/* Discord Overlay — transparent canvas + custom avatars */
+/*
+ * Selectors target Streamkit's stable, unhashed class names:
+ *   <li class="Voice_voiceState__… [wrapper_speaking] voice_state" data-userid="…">
+ *     <img class="Voice_avatar__… [Voice_avatarSpeaking__…] voice_avatar">
+ * `wrapper_speaking` (on the li) and `voice_avatar` (on the img) survive
+ * Streamkit rebuilds; the CSS-module names carry a build hash and do not.
+ */
 /* Base transparent canvas settings */
 body {
     margin: 0;
@@ -14,13 +21,13 @@ body {
 }
 
 /* Keep voice states as a compact inline grid */
-li[class^="Voice_voiceState"] {
+li.voice_state {
     position: static;
     display: inline-grid;
 }
 
 /* Hide default avatars for all users unless overridden */
-li > img[class^="Voice_avatar"] {
+li > img.voice_avatar {
     display: none;
 }
 
@@ -41,7 +48,7 @@ li > img[class^="Voice_avatar"] {
 
         css.push_str(&format!(
             r#"/* User {user_id} */
-li[data-userid="{id}"] > img[class^="Voice_avatar"] {{
+li[data-userid="{id}"] > img.voice_avatar {{
     display: block !important;
     content: url("{idle}");
     width: auto !important;
@@ -51,9 +58,11 @@ li[data-userid="{id}"] > img[class^="Voice_avatar"] {{
     transition: filter 0.2s ease, transform 0.2s ease;
 }}
 
-li[data-userid="{id}"][class*="Voice_avatarSpeaking"] > img[class^="Voice_avatar"],
-li[data-userid="{id}"][class*="Voice_speaking"] > img[class^="Voice_avatar"] {{
-    content: url("{speaking}");
+/* Speaking: the `wrapper_speaking` class lands on the li, the hashed
+ * `Voice_avatarSpeaking…` one on the img — either is enough to match. */
+li[data-userid="{id}"].wrapper_speaking > img.voice_avatar,
+li[data-userid="{id}"] > img.voice_avatar[class*="avatarSpeaking"] {{
+    content: url("{speaking}") !important;
     filter: brightness(100%);
     animation: speak-bounce 0.6s ease-in-out infinite;
 }}
@@ -104,5 +113,26 @@ mod tests {
         assert!(css.contains("https://cdn.example/speak.png"));
         assert!(css.contains("speak-bounce"));
         assert!(css.contains("background: transparent !important"));
+    }
+
+    /// The speaking state must key off Streamkit's unhashed class names:
+    /// `wrapper_speaking` sits on the `li`, not on the avatar `img`.
+    #[test]
+    fn speaking_rule_targets_the_stable_class_names() {
+        let mut users = HashMap::new();
+        users.insert(
+            "42".into(),
+            AvatarOverride {
+                idle_url: "idle.png".into(),
+                speaking_url: "speak.png".into(),
+            },
+        );
+
+        let css = generate_overlay_css(&users);
+        assert!(css.contains(r#"li[data-userid="42"].wrapper_speaking > img.voice_avatar"#));
+        assert!(css.contains(r#"img.voice_avatar[class*="avatarSpeaking"]"#));
+        // The old selector looked for the speaking class on the li, where it
+        // never appears — that is why the image never swapped.
+        assert!(!css.contains(r#"[class*="Voice_avatarSpeaking"] >"#));
     }
 }
