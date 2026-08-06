@@ -119,6 +119,7 @@ You can still use full remote URLs (`https://…`) if the image is hosted elsewh
 | `GET /` | Small index page |
 | `GET /overlay` | Entry point — redirects to the proxied Streamkit path |
 | `GET /css` | Preview generated stylesheet |
+| `GET /web/*.css` / `GET /web/*.js` | Same-origin page assets used by the index and overlay |
 | `GET /assets/*` | **Local images** from `./assets/` |
 | `GET /proxy?url=...` | Optional asset proxy (Discord hosts only) |
 | `GET /health` | Liveness |
@@ -181,12 +182,18 @@ anyone.
 ### CSS injection
 
 1. Server relays the Streamkit HTML with `reqwest`
-2. Injects a `<style>` block, last in `<head>` so it wins over Streamkit's own CSS:
+2. Injects the parser-blocking RPC bridge script before Streamkit's bundle:
+   - `/web/rpc-bridge.js` rewrites Discord's local websocket connections to `/rpc/<port>/`
+3. Injects `/css` as a stylesheet link, last in `<head>` so it wins over Streamkit's own CSS:
    - Forces a transparent background
    - Hides default avatars
    - Shows custom images for mapped `data-userid` values
    - Swaps speaking art + bounce animation when Discord adds speaking classes
-4. Injects the hot-reload watcher script
+4. Injects `/web/hot-reload.js`, which watches `/reload-events` and reloads the overlay when config changes
+
+The HTML, CSS, and JavaScript source files live under `web/`. They are embedded at
+compile time, so standalone binaries do not need a separate `web/` folder at runtime.
+Editing those files requires rebuilding the binary; editing `config.toml` still hot-reloads.
 
 ## Project layout
 
@@ -194,11 +201,21 @@ anyone.
 src/
   main.rs      # bootstrap + logging
   config.rs    # TOML config + UserMap
-  css.rs       # CSS generator
+  css.rs       # renders web/overlay.css + web/user.css for the current users
   proxy.rs     # fetch HTML / assets + inject
   reload.rs    # config.toml watcher + hot-reload signal
   rpc.rs       # websocket bridge to the local Discord client
   routes.rs    # Axum routes
+  web.rs       # compile-time web templates/assets and small render helpers
+web/
+  index.html   # landing page template
+  index.css    # landing page stylesheet
+  overlay.css  # shared overlay stylesheet
+  user.css     # per-user overlay CSS template
+  overlay-head.html
+  rpc-bridge-head.html
+  rpc-bridge.js
+  hot-reload.js
 config.toml    # local settings (edit me)
 ```
 

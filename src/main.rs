@@ -4,10 +4,11 @@ mod proxy;
 mod reload;
 mod routes;
 mod rpc;
+mod web;
 
 use config::Config;
 use reload::ConfigWatcher;
-use routes::{app_router, AppState};
+use routes::{AppState, app_router};
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 

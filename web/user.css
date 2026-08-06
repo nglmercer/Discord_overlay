@@ -1,0 +1,24 @@
+/* User {{USER_ID}} */
+li[data-userid="{{USER_ID}}"] > img.voice_avatar {
+    display: block !important;
+    content: url("{{IDLE_URL}}");
+    width: auto !important;
+    height: auto !important;
+    border-radius: 0 !important;
+    filter: brightness(60%);
+    transition: filter 0.2s ease, transform 0.2s ease;
+}
+
+/* Configured render order: lower values appear first. */
+li[data-userid="{{USER_ID}}"] {
+    order: {{ORDER}} !important;
+}
+
+/* Speaking: the `wrapper_speaking` class lands on the li, the hashed
+ * `Voice_avatarSpeaking…` one on the img — either is enough to match. */
+li[data-userid="{{USER_ID}}"].wrapper_speaking > img.voice_avatar,
+li[data-userid="{{USER_ID}}"] > img.voice_avatar[class*="avatarSpeaking"] {
+    content: url("{{SPEAKING_URL}}") !important;
+    filter: brightness(100%);
+    animation: speak-bounce 0.6s ease-in-out infinite;
+}

@@ -1,7 +1,6 @@
-use crate::config::Config;
-use crate::css::generate_overlay_css;
+use crate::web;
 use axum::body::Bytes;
-use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use reqwest::{Client, Url};
 use thiserror::Error;
 
@@ -181,7 +180,7 @@ fn origin_of(url: &Url) -> String {
 ///
 /// Anything that is not successfully-served HTML (scripts, images, Cloudflare
 /// challenges, redirects) passes through untouched.
-pub fn inject_overlay(response: &mut UpstreamResponse, config: &Config, version: u64) {
+pub fn inject_overlay(response: &mut UpstreamResponse, version: u64) {
     if !response.status.is_success() || !response.is_html() {
         return;
     }
@@ -191,82 +190,21 @@ pub fn inject_overlay(response: &mut UpstreamResponse, config: &Config, version:
 
     // The RPC bridge must patch `window.WebSocket` before Streamkit's bundle
     // runs, so it goes first; the CSS goes last to win the cascade.
-    let injected = inject_head(html, RPC_BRIDGE_SCRIPT, &head_injection(config, version));
+    let injected = inject_head(
+        html,
+        web::RPC_BRIDGE_HEAD,
+        &web::render_overlay_head(version),
+    );
     response.body = Bytes::from(injected);
 }
 
-/// Everything we splice into the Streamkit document head: the generated avatar
-/// CSS and the watcher script that reloads the page when `config.toml` changes.
+/// Everything we splice into the Streamkit document head is a file under
+/// `web/`: the generated avatar CSS is loaded from `/css`, and the watcher
+/// script is loaded from `/web/hot-reload.js`.
 ///
 /// Note there is deliberately no `<base href>`: the whole Streamkit app is
 /// reverse-proxied through this server, so relative URLs must keep resolving
 /// against our own origin.
-fn head_injection(config: &Config, version: u64) -> String {
-    let css = generate_overlay_css(&config.users);
-    let hot_reload = HOT_RELOAD_SCRIPT.replace("__VERSION__", &version.to_string());
-
-    format!(
-        r#"<style id="discord-overlay-custom" type="text/css">
-{css}
-</style>
-{hot_reload}
-"#
-    )
-}
-
-/// Routes Streamkit's Discord RPC socket through this server.
-///
-/// The bundle hardcodes `new WebSocket("ws://127.0.0.1:" + port + "/?v=1…")`,
-/// and the Discord client rejects that handshake because the browser stamps it
-/// with our origin. Patching `window.WebSocket` here — before the bundle runs —
-/// sends it to `/rpc/<port>/` instead, where the server re-dials Discord with
-/// the origin it expects.
-const RPC_BRIDGE_SCRIPT: &str = r#"<script id="discord-overlay-rpc-bridge">
-(() => {
-  const Native = window.WebSocket;
-  const localSocket = /^ws:\/\/(?:127\.0\.0\.1|localhost):(\d+)\//i;
-  const Bridged = function (url, protocols) {
-    let target = String(url);
-    const match = localSocket.exec(target);
-    // Never rewrite a socket that already points at this proxy.
-    if (match && match[1] !== location.port) {
-      target = target.replace(localSocket, "ws://" + location.host + "/rpc/" + match[1] + "/");
-    }
-    return protocols === undefined ? new Native(target) : new Native(target, protocols);
-  };
-  Bridged.prototype = Native.prototype;
-  for (const key of ["CONNECTING", "OPEN", "CLOSING", "CLOSED"]) {
-    Bridged[key] = Native[key];
-  }
-  window.WebSocket = Bridged;
-})();
-</script>"#;
-
-/// Long-polls the proxy for config changes and reloads the overlay on any edit.
-/// Served from the same origin, so a relative endpoint always resolves.
-const HOT_RELOAD_SCRIPT: &str = r#"<script id="discord-overlay-hotreload">
-(() => {
-  const endpoint = new URL("/reload-events", location.origin).href;
-  const version = __VERSION__;
-  const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
-  (async () => {
-    for (;;) {
-      try {
-        const res = await fetch(endpoint + "?since=" + version, { cache: "no-store" });
-        const next = Number(await res.text());
-        if (Number.isFinite(next) && next !== version) {
-          location.reload();
-          return;
-        }
-      } catch (err) {
-        // Proxy restarting or unreachable — back off and keep trying.
-        await sleep(2000);
-      }
-    }
-  })();
-})();
-</script>"#;
-
 /// Splice `early` in right after `<head>` and `late` in just before `</head>`,
 /// tolerating documents that are missing either tag.
 fn inject_head(html: &str, early: &str, late: &str) -> String {
@@ -293,7 +231,7 @@ fn inject_head(html: &str, early: &str, late: &str) -> String {
         (None, None) => {
             return format!(
                 "<!DOCTYPE html>\n<html>\n<head>\n{early}{late}</head>\n<body>\n{html}\n</body>\n</html>"
-            )
+            );
         }
     }
     out
@@ -313,21 +251,6 @@ fn head_open_end(lower: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AssetsConfig, ServerConfig, StreamkitConfig};
-
-    fn test_config() -> Config {
-        Config {
-            server: ServerConfig {
-                host: "127.0.0.1".to_string(),
-                port: 3000,
-            },
-            streamkit: StreamkitConfig {
-                url: "https://streamkit.discord.com/overlay/voice".to_string(),
-            },
-            assets: AssetsConfig::default(),
-            users: Default::default(),
-        }
-    }
 
     #[test]
     fn early_lands_after_head_open_and_late_before_head_close() {
@@ -341,7 +264,10 @@ mod tests {
         let early = out.find("<!--EARLY-->").unwrap();
         let late = out.find("<!--LATE-->").unwrap();
 
-        assert!(early < out.find("<title>").unwrap(), "early must precede the bundle");
+        assert!(
+            early < out.find("<title>").unwrap(),
+            "early must precede the bundle"
+        );
         assert!(early < out.find("main.js").unwrap());
         assert!(late > out.find("main.js").unwrap());
         assert!(late < out.find("</head>").unwrap());
@@ -369,11 +295,14 @@ mod tests {
     }
 
     #[test]
-    fn injection_has_css_and_hot_reload_but_no_base_tag() {
-        let out = head_injection(&test_config(), 7);
+    fn injection_loads_external_web_assets_but_no_base_tag() {
+        let out = crate::web::render_overlay_head(7);
         assert!(out.contains(r#"id="discord-overlay-custom""#));
-        assert!(out.contains("const version = 7;"));
+        assert!(out.contains(r#"href="/css?version=7""#));
+        assert!(out.contains(r#"src="/web/hot-reload.js?version=7""#));
+        assert!(!out.contains("const version = 7;"));
         assert!(!out.contains("__VERSION__"));
+        assert!(!out.contains("<style"));
         // A <base> pointing upstream is what broke same-origin loading before.
         assert!(!out.contains("<base"));
     }

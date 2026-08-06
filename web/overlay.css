@@ -1,0 +1,33 @@
+/* Discord Overlay — transparent canvas + custom avatars */
+/*
+ * Selectors target Streamkit's stable, unhashed class names:
+ *   <li class="Voice_voiceState__… wrapper_speaking voice_state" data-userid="…">
+ *     <img class="Voice_avatar__… Voice_avatarSpeaking__… voice_avatar">
+ * `wrapper_speaking` (on the li) and `voice_avatar` (on the img) survive
+ * Streamkit rebuilds; the CSS-module names carry a build hash and do not.
+ */
+
+/* Base transparent canvas settings */
+body {
+    margin: 0;
+    overflow: hidden;
+    background: transparent !important;
+}
+
+/* Keep voice states as a compact inline grid */
+li.voice_state {
+    position: static;
+    display: inline-grid;
+}
+
+/* Hide default avatars for all users unless overridden */
+li > img.voice_avatar {
+    display: none;
+}
+
+@keyframes speak-bounce {
+    0%, 100% { transform: translateY(0) scale(1); }
+    25%      { transform: translateY(-8px) scale(1.03); }
+    50%      { transform: translateY(0) scale(1); }
+    75%      { transform: translateY(-4px) scale(1.02); }
+}

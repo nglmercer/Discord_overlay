@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Discord Overlay Proxy</title>
+  <link rel="stylesheet" href="/web/index.css" />
+</head>
+<body>
+  <main class="page">
+    <h1>Discord Overlay Proxy</h1>
+    <p>Transparent Streamkit overlay with custom avatars for TikTok Live Studio.</p>
+
+    <ul class="route-list">
+      <li><a href="/overlay"><code>/overlay</code></a> — proxied overlay (redirects to the Streamkit path)</li>
+      <li><code>/overlay?target=URL</code> — override Streamkit URL</li>
+      <li><a href="/css"><code>/css</code></a> — preview generated CSS</li>
+      <li><code>/assets/…</code> — local images from <code>{{ASSETS_DIR}}</code></li>
+      <li><a href="/health"><code>/health</code></a> — liveness</li>
+    </ul>
+
+    <h2>Hot reload</h2>
+    <p>Save <code>config.toml</code> and every open <code>/overlay</code> (OBS / TikTok Live Studio
+      browser sources included) refreshes itself within a second. A config with a syntax error is
+      ignored and the previous one stays live, so the overlay never goes blank.</p>
+    <p>Changing <code>assets.dir</code> is the one setting that still needs a restart.</p>
+
+    <h2>Local images</h2>
+    <p>Drop files in <code>{{ASSETS_DIR}}</code>, then reference them in <code>config.toml</code>:</p>
+    <pre>[users.YOUR_DISCORD_ID]
+idle_url = "alice-idle.png"
+speaking_url = "alice-speaking.png"</pre>
+    <p>They are served as <code>{{PUBLIC_BASE_URL}}/assets/…</code> (absolute URLs, so Streamkit’s
+      base tag cannot break them).</p>
+  </main>
+</body>
+</html>

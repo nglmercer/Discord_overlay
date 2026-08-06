@@ -2,13 +2,14 @@ use crate::css::generate_overlay_css;
 use crate::proxy::{self, ProxyError};
 use crate::reload::ConfigWatcher;
 use crate::rpc;
+use crate::web;
+use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{Path, Query, RawQuery, Request, State};
-use axum::http::{header, HeaderMap, Method, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
-use axum::Router;
 use reqwest::Client;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -51,6 +52,9 @@ pub fn app_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/overlay", get(overlay))
         .route("/css", get(preview_css))
+        .route("/web/index.css", get(web_index_css))
+        .route("/web/rpc-bridge.js", get(web_rpc_bridge))
+        .route("/web/hot-reload.js", get(web_hot_reload))
         .route("/proxy", get(asset_proxy))
         .route("/reload-events", get(reload_events))
         .route("/rpc/{port}", get(rpc_bridge))
@@ -71,46 +75,31 @@ pub fn app_router(state: AppState) -> Router {
 
 async fn index(State(state): State<AppState>) -> impl IntoResponse {
     let config = state.watcher.config();
-    let assets = config.assets.dir.display();
-    let base = config.public_base_url();
-    let body = format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Discord Overlay Proxy</title>
-  <style>
-    body {{ font-family: system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; }}
-    code {{ background: #f4f4f4; padding: 0.1em 0.35em; border-radius: 4px; }}
-    a {{ color: #5865f2; }}
-    pre {{ background: #f4f4f4; padding: 0.75rem 1rem; border-radius: 8px; overflow-x: auto; }}
-  </style>
-</head>
-<body>
-  <h1>Discord Overlay Proxy</h1>
-  <p>Transparent Streamkit overlay with custom avatars for TikTok Live Studio.</p>
-  <ul>
-    <li><a href="/overlay"><code>/overlay</code></a> — proxied overlay (redirects to the Streamkit path)</li>
-    <li><code>/overlay?target=URL</code> — override Streamkit URL</li>
-    <li><a href="/css"><code>/css</code></a> — preview generated CSS</li>
-    <li><code>/assets/…</code> — local images from <code>{assets}/</code></li>
-    <li><a href="/health"><code>/health</code></a> — liveness</li>
-  </ul>
-  <h2>Hot reload</h2>
-  <p>Save <code>config.toml</code> and every open <code>/overlay</code> (OBS / TikTok Live Studio
-  browser sources included) refreshes itself within a second. A config with a syntax error is
-  ignored and the previous one stays live, so the overlay never goes blank.</p>
-  <p>Changing <code>assets.dir</code> is the one setting that still needs a restart.</p>
-  <h2>Local images</h2>
-  <p>Drop files in <code>{assets}/</code>, then reference them in <code>config.toml</code>:</p>
-  <pre>[users.YOUR_DISCORD_ID]
-idle_url = "alice-idle.png"
-speaking_url = "alice-speaking.png"</pre>
-  <p>They are served as <code>{base}/assets/…</code> (absolute URLs, so Streamkit’s base tag cannot break them).</p>
-</body>
-</html>"#
-    );
+    let assets = config.assets.dir.display().to_string();
+    let body = web::render_index(&assets, &config.public_base_url());
     ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], body)
+}
+
+async fn web_index_css() -> impl IntoResponse {
+    web_asset_response("text/css; charset=utf-8", web::INDEX_CSS)
+}
+
+async fn web_rpc_bridge() -> impl IntoResponse {
+    web_asset_response("text/javascript; charset=utf-8", web::RPC_BRIDGE_JS)
+}
+
+async fn web_hot_reload() -> impl IntoResponse {
+    web_asset_response("text/javascript; charset=utf-8", web::HOT_RELOAD_JS)
+}
+
+fn web_asset_response(content_type: &'static str, body: &'static str) -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        body,
+    )
 }
 
 async fn health() -> impl IntoResponse {
@@ -177,13 +166,8 @@ async fn relay(
     headers: &HeaderMap,
     body: Bytes,
 ) -> Result<Response, AppError> {
-    let mut upstream =
-        proxy::forward(&state.client, target, method, headers, body).await?;
-    proxy::inject_overlay(
-        &mut upstream,
-        &state.watcher.config(),
-        state.watcher.version(),
-    );
+    let mut upstream = proxy::forward(&state.client, target, method, headers, body).await?;
+    proxy::inject_overlay(&mut upstream, state.watcher.version());
 
     // Always re-fetch in TikTok Live Studio / OBS browser sources.
     if upstream.is_html() {
