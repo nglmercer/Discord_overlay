@@ -87,6 +87,21 @@ You can still use full remote URLs (`https://…`) if the image is hosted elsewh
 | `GET /assets/*` | **Local images** from `./assets/` |
 | `GET /proxy?url=...` | Optional asset proxy (Discord hosts only) |
 | `GET /health` | Liveness |
+| `GET /reload-events?since=N` | Hot-reload long poll (used by the injected script) |
+
+## Hot reload
+
+`config.toml` is watched while the server runs. Save the file and every open
+`/overlay` — including OBS and TikTok Live Studio browser sources — reloads
+itself within about a second. No restart, no clicking "refresh" in the source.
+
+- The overlay page carries a small script that long-polls `/reload-events`; the
+  server answers as soon as the config version changes.
+- A config with a syntax error is logged and **ignored**: the previously loaded
+  configuration stays live, so the overlay never goes blank on a typo.
+- Restarting the proxy also refreshes connected overlays.
+- `assets.dir` is the one setting that still requires a restart; the static
+  mount is created at startup.
 
 ## How CSS injection works
 
@@ -97,6 +112,7 @@ You can still use full remote URLs (`https://…`) if the image is hosted elsewh
    - Hides default avatars
    - Shows custom images for mapped `data-userid` values
    - Swaps speaking art + bounce animation when Discord adds speaking classes
+4. Injects the hot-reload watcher script
 
 ## Project layout
 
@@ -106,6 +122,7 @@ src/
   config.rs    # TOML config + UserMap
   css.rs       # CSS generator
   proxy.rs     # fetch HTML / assets + inject
+  reload.rs    # config.toml watcher + hot-reload signal
   routes.rs    # Axum routes
 config.toml    # local settings (edit me)
 ```

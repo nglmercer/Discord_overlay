@@ -9,7 +9,7 @@ port = 3000
 [streamkit]
 # Paste your full Discord Streamkit voice overlay URL here.
 # Streamkit → Install for Developer → copy the voice widget link.
-url = "https://streamkit.discord.com/overlay/voice?server=YOUR_SERVER_ID&channel=YOUR_CHANNEL_ID"
+url = "https://streamkit.discord.com/overlay/voice/759263893758672916/1137940724747337839?icon=true&online=true&logo=white&text_color=%23ffffff&text_size=14&text_outline_color=%23000000&text_outline_size=0&text_shadow_color=%23000000&text_shadow_size=0&bg_color=%231e2124&bg_opacity=0.95&bg_shadow_color=%23000000&bg_shadow_size=0&invite_code=&limit_speaking=false&small_avatars=false&hide_names=true&fade_chat=0&streamer_avatar_first=false"
 
 # Local image folder (served at http://HOST:PORT/assets/...)
 [assets]
@@ -30,9 +30,9 @@ dir = "assets"
 # speaking_url = "assets/team/alice-speaking.png"   # "assets/" prefix is optional
 #
 # --- Remote URLs still work ---
-# idle_url = "https://example.com/avatars/alice-idle.png"
+# idle_url = "https://cdn.discordapp.com/attachments/962165499834290196/1535036361177038878/zetarias-a.png?ex=6a764d84&is=6a74fc04&hm=3b0fb60f74b3e92a8562c58462a35eebe500aa3dbff81f20da6861b6772614b3&"
 # speaking_url = "https://example.com/avatars/alice-speaking.png"
 
-[users.000000000000000000]
-idle_url = "example-idle.png"
-speaking_url = "example-speaking.png"
+[users.747586531123789954]
+idle_url = "https://cdn.discordapp.com/attachments/962165499834290196/1535036361177038878/zetarias-a.png?ex=6a764d84&is=6a74fc04&hm=3b0fb60f74b3e92a8562c58462a35eebe500aa3dbff81f20da6861b6772614b3&"
+speaking_url = "https://cdn.discordapp.com/attachments/962165499834290196/1535036361562656971/zetarias-b.png?ex=6a764d84&is=6a74fc04&hm=34efe0591f9fa0a93ff2abdca577a0a022d77db701206a927325cbe9a7c0b531&"
