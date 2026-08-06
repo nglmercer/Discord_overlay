@@ -45,6 +45,7 @@ li > img.voice_avatar {
         let idle = escape_css_url(&avatar.idle_url);
         let speaking = escape_css_url(&avatar.speaking_url);
         let id = escape_css_ident(user_id);
+        let order = avatar.order;
 
         css.push_str(&format!(
             r#"/* User {user_id} */
@@ -56,6 +57,11 @@ li[data-userid="{id}"] > img.voice_avatar {{
     border-radius: 0 !important;
     filter: brightness(60%);
     transition: filter 0.2s ease, transform 0.2s ease;
+}}
+
+/* Configured render order: lower values appear first. */
+li[data-userid="{id}"] {{
+    order: {order} !important;
 }}
 
 /* Speaking: the `wrapper_speaking` class lands on the li, the hashed
@@ -104,6 +110,7 @@ mod tests {
             AvatarOverride {
                 idle_url: "https://cdn.example/idle.png".into(),
                 speaking_url: "https://cdn.example/speak.png".into(),
+                order: 2,
             },
         );
 
@@ -111,6 +118,7 @@ mod tests {
         assert!(css.contains("data-userid=\"123456789\""));
         assert!(css.contains("https://cdn.example/idle.png"));
         assert!(css.contains("https://cdn.example/speak.png"));
+        assert!(css.contains("order: 2 !important"));
         assert!(css.contains("speak-bounce"));
         assert!(css.contains("background: transparent !important"));
     }
@@ -125,6 +133,7 @@ mod tests {
             AvatarOverride {
                 idle_url: "idle.png".into(),
                 speaking_url: "speak.png".into(),
+                order: 1,
             },
         );
 

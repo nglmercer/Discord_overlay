@@ -22,6 +22,7 @@ dir = "assets"
 # Put PNGs/WebPs in ./assets/ then use just the filename:
 #
 # [users.123456789012345678]
+# order = 1                         # Lower values render first.
 # idle_url = "alice-idle.png"
 # speaking_url = "alice-speaking.png"
 #
@@ -34,5 +35,6 @@ dir = "assets"
 # speaking_url = "https://example.com/avatars/alice-speaking.png"
 
 [users.747586531123789954]
+order = 1
 idle_url = "https://cdn.discordapp.com/attachments/962165499834290196/1535036361177038878/zetarias-a.png?ex=6a764d84&is=6a74fc04&hm=3b0fb60f74b3e92a8562c58462a35eebe500aa3dbff81f20da6861b6772614b3&"
 speaking_url = "https://cdn.discordapp.com/attachments/962165499834290196/1535036361562656971/zetarias-b.png?ex=6a764d84&is=6a74fc04&hm=34efe0591f9fa0a93ff2abdca577a0a022d77db701206a927325cbe9a7c0b531&"

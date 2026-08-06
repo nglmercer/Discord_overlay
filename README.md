@@ -71,7 +71,7 @@ explicitly provided path is never created automatically:
 | `[server]` | Bind host/port (default `127.0.0.1:3000`) |
 | `[streamkit]` | Default Streamkit overlay URL |
 | `[assets]` | Local image folder (default `assets/`) |
-| `[users.<discord_id>]` | `idle_url` + `speaking_url` per user |
+| `[users.<discord_id>]` | `order`, `idle_url` + `speaking_url` per user |
 
 Enable **Developer Mode** in Discord → right-click a user → **Copy User ID**.
 
@@ -89,9 +89,13 @@ assets/
 
 ```toml
 [users.123456789012345678]
+order = 1
 idle_url = "alice-idle.png"
 speaking_url = "alice-speaking.png"
 ```
+
+`order` controls the rendered voice-state position in the overlay. Lower
+values appear first; omitted values use `0`.
 
 The server rewrites those to absolute URLs:
 

@@ -20,6 +20,10 @@ pub const DEFAULT_CONFIG: &str = include_str!("../config.toml");
 pub struct AvatarOverride {
     pub idle_url: String,
     pub speaking_url: String,
+    /// CSS flex/grid order for this user's rendered voice state. Lower values
+    /// are rendered first; omitted values default to zero.
+    #[serde(default)]
+    pub order: i32,
 }
 
 /// Discord user ID → avatar override mapping.
@@ -227,5 +231,22 @@ mod tests {
         let config: Config = toml::from_str(DEFAULT_CONFIG).expect("default config must be valid");
         assert_eq!(config.server.port, 3000);
         assert!(!config.streamkit.url.is_empty());
+    }
+
+    #[test]
+    fn user_order_defaults_to_zero() {
+        let config: Config = toml::from_str(
+            r#"
+            [server]
+            [streamkit]
+            url = "https://streamkit.discord.com/overlay/voice"
+            [users.42]
+            idle_url = "idle.png"
+            speaking_url = "speaking.png"
+            "#,
+        )
+        .expect("config without order must remain valid");
+
+        assert_eq!(config.users["42"].order, 0);
     }
 }
