@@ -1,10 +1,10 @@
 use crate::css::generate_overlay_css;
 use crate::proxy::{self, ProxyError};
 use crate::reload::ConfigWatcher;
-use axum::body::Body;
-use axum::extract::{Query, State};
-use axum::http::{header, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::body::{Body, Bytes};
+use axum::extract::{Query, Request, State};
+use axum::http::{header, HeaderMap, Method, StatusCode};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::Router;
 use reqwest::Client;
@@ -18,6 +18,9 @@ use tower_http::trace::TraceLayer;
 /// How long a `/reload-events` request parks before answering with the
 /// unchanged version. Short enough to survive proxies and browser timeouts.
 const RELOAD_POLL_TIMEOUT: Duration = Duration::from_secs(25);
+
+/// Cap on request bodies relayed upstream (Cloudflare challenge posts are tiny).
+const MAX_UPSTREAM_BODY: usize = 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -49,6 +52,9 @@ pub fn app_router(state: AppState) -> Router {
         .route("/proxy", get(asset_proxy))
         .route("/reload-events", get(reload_events))
         .nest_service("/assets", static_files)
+        // Everything else is Streamkit's own app (scripts, images, Cloudflare
+        // challenge endpoints), relayed so the browser only ever sees one origin.
+        .fallback(upstream)
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -113,8 +119,12 @@ pub struct OverlayQuery {
     pub target: Option<String>,
 }
 
+/// Entry point: send the browser to the *same* path Streamkit uses, on our
+/// origin. Keeping the path identical matters — the Streamkit SPA routes on
+/// `location.pathname` to pick the voice/chat/status overlay.
 async fn overlay(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<OverlayQuery>,
 ) -> Result<Response, AppError> {
     let config = state.watcher.config();
@@ -123,21 +133,70 @@ async fn overlay(
         .as_deref()
         .filter(|s| !s.is_empty())
         .unwrap_or(config.streamkit.url.as_str());
+    let target_url = proxy::parse_http_url(target)?;
 
-    tracing::info!(%target, "fetching streamkit overlay");
+    let local_path = path_and_query(target_url.path(), target_url.query());
+    if local_path != "/overlay" {
+        tracing::info!(%target, %local_path, "redirecting to the proxied overlay path");
+        return Ok(Redirect::temporary(&local_path).into_response());
+    }
 
-    let html =
-        proxy::fetch_and_inject(&state.client, target, &config, state.watcher.version()).await?;
+    // The upstream overlay really does live at `/overlay`: serve it in place
+    // rather than redirecting to ourselves forever.
+    relay(&state, target_url, Method::GET, &headers, Bytes::new()).await
+}
 
-    Ok((
-        [
-            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-            // Always re-fetch in TikTok Live Studio / OBS browser sources.
-            (header::CACHE_CONTROL, "no-store, no-cache, must-revalidate"),
-        ],
-        html,
-    )
-        .into_response())
+/// Reverse-proxy any path we do not serve ourselves to the Streamkit origin,
+/// injecting the overlay CSS into HTML replies.
+async fn upstream(State(state): State<AppState>, request: Request) -> Result<Response, AppError> {
+    let config = state.watcher.config();
+    let base = proxy::parse_http_url(&config.streamkit.url)?;
+
+    let (parts, body) = request.into_parts();
+    let path = parts.uri.path_and_query().map_or("/", |pq| pq.as_str());
+    let target = base
+        .join(path)
+        .map_err(|e| ProxyError::InvalidUrl(e.to_string()))?;
+
+    let body = axum::body::to_bytes(body, MAX_UPSTREAM_BODY)
+        .await
+        .map_err(|_| ProxyError::BodyTooLarge)?;
+
+    relay(&state, target, parts.method, &parts.headers, body).await
+}
+
+/// Shared plumbing: forward upstream, inject into HTML, hand back the reply.
+async fn relay(
+    state: &AppState,
+    target: reqwest::Url,
+    method: Method,
+    headers: &HeaderMap,
+    body: Bytes,
+) -> Result<Response, AppError> {
+    let mut upstream =
+        proxy::forward(&state.client, target, method, headers, body).await?;
+    proxy::inject_overlay(
+        &mut upstream,
+        &state.watcher.config(),
+        state.watcher.version(),
+    );
+
+    // Always re-fetch in TikTok Live Studio / OBS browser sources.
+    if upstream.is_html() {
+        upstream.headers.insert(
+            header::CACHE_CONTROL,
+            header::HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+        );
+    }
+
+    Ok((upstream.status, upstream.headers, Body::from(upstream.body)).into_response())
+}
+
+fn path_and_query(path: &str, query: Option<&str>) -> String {
+    match query {
+        Some(query) => format!("{path}?{query}"),
+        None => path.to_string(),
+    }
 }
 
 async fn preview_css(State(state): State<AppState>) -> impl IntoResponse {
@@ -183,11 +242,12 @@ pub struct ProxyQuery {
     pub url: String,
 }
 
-/// Optional asset proxy for cases where relative rewriting is not enough
-/// (e.g. mixed-content or CORS edge cases).
-/// Usage: `/proxy?url=https://streamkit.discord.com/...`
+/// Escape hatch for fetching an absolute Discord URL that the same-origin
+/// fallback cannot reach (a CDN host, say).
+/// Usage: `/proxy?url=https://cdn.discordapp.com/...`
 async fn asset_proxy(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<ProxyQuery>,
 ) -> Result<Response, AppError> {
     if !is_allowed_proxy_url(&query.url) {
@@ -196,16 +256,8 @@ async fn asset_proxy(
         ));
     }
 
-    let (bytes, content_type) = proxy::fetch_asset(&state.client, &query.url).await?;
-
-    Ok((
-        [
-            (header::CONTENT_TYPE, content_type),
-            (header::CACHE_CONTROL, "public, max-age=300".to_string()),
-        ],
-        Body::from(bytes),
-    )
-        .into_response())
+    let target = proxy::parse_http_url(&query.url)?;
+    relay(&state, target, Method::GET, &headers, Bytes::new()).await
 }
 
 /// Domains the `/proxy` endpoint is allowed to fetch from.
