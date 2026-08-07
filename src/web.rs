@@ -61,8 +61,16 @@ mod tests {
     #[test]
     fn renders_external_overlay_assets_with_version() {
         let head = render_overlay_head(7);
-        assert!(head.contains(r#"src="/web/rpc-bridge.js""#));
         assert!(head.contains(r#"href="/css?version=7""#));
         assert!(head.contains(r#"src="/web/hot-reload.js?version=7""#));
+    }
+
+    /// The bridge is injected separately, before Streamkit's bundle; repeating
+    /// it in the late head block loaded the script — and re-wrapped
+    /// `window.WebSocket` — a second time.
+    #[test]
+    fn rpc_bridge_is_only_injected_once() {
+        assert!(RPC_BRIDGE_HEAD.contains(r#"src="/web/rpc-bridge.js""#));
+        assert!(!render_overlay_head(7).contains("rpc-bridge.js"));
     }
 }

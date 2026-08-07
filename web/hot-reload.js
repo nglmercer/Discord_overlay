@@ -12,7 +12,12 @@
       try {
         const res = await fetch(endpoint + "?since=" + version, { cache: "no-store" });
         const next = Number(await res.text());
-        if (Number.isFinite(next) && next !== version) {
+        if (!res.ok || !Number.isFinite(next)) {
+          // An error page answers instantly; without a pause this would spin.
+          await sleep(2000);
+          continue;
+        }
+        if (next !== version) {
           location.reload();
           return;
         }

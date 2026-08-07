@@ -14,6 +14,19 @@ body {
     background: transparent !important;
 }
 
+/* `order` is only honoured on flex/grid *items*, and Streamkit ships the list
+ * as a plain block `ul` (`.Voice_voiceStates__… { list-style-type: none;
+ * padding-left: 15px }`). Opting the list into flex is what makes the
+ * per-user `order` in config.toml take effect; without it the browser
+ * silently ignores every `order` rule and keeps Streamkit's own
+ * alphabetical-by-nickname sort. */
+ul.voice_states {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: flex-end;
+}
+
 /* Keep voice states as a compact inline grid */
 li.voice_state {
     position: static;

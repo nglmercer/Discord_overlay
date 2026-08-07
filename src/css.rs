@@ -6,7 +6,13 @@ pub fn generate_overlay_css(users: &UserMap) -> String {
     let mut css = String::with_capacity(OVERLAY_CSS.len() + users.len() * 512);
     css.push_str(OVERLAY_CSS);
 
-    for (user_id, avatar) in users {
+    // `UserMap` is a HashMap, so iterating it directly reshuffles the rules on
+    // every reload. Emit by (order, id) instead: the stylesheet is stable
+    // across restarts and reads in the same sequence the overlay renders.
+    let mut ordered: Vec<_> = users.iter().collect();
+    ordered.sort_by_key(|(user_id, avatar)| (avatar.order, *user_id));
+
+    for (user_id, avatar) in ordered {
         let idle = escape_css_url(&avatar.idle_url);
         let speaking = escape_css_url(&avatar.speaking_url);
         let id = escape_css_ident(user_id);
@@ -63,6 +69,30 @@ mod tests {
         assert!(css.contains("order: 2 !important"));
         assert!(css.contains("speak-bounce"));
         assert!(css.contains("background: transparent !important"));
+    }
+
+    /// `order` is inert unless the parent is a flex/grid container, and
+    /// Streamkit's `ul.voice_states` is a plain block list.
+    #[test]
+    fn voice_state_list_is_a_flex_container_so_order_applies() {
+        let css = generate_overlay_css(&HashMap::new());
+        assert!(css.contains("ul.voice_states"));
+        assert!(css.contains("display: flex"));
+    }
+
+    #[test]
+    fn rules_are_emitted_in_configured_order() {
+        let avatar = |order| AvatarOverride {
+            idle_url: "idle.png".into(),
+            speaking_url: "speak.png".into(),
+            order,
+        };
+        let mut users = HashMap::new();
+        users.insert("aaa".to_string(), avatar(9));
+        users.insert("zzz".to_string(), avatar(-1));
+
+        let css = generate_overlay_css(&users);
+        assert!(css.find("/* User zzz */").unwrap() < css.find("/* User aaa */").unwrap());
     }
 
     /// The speaking state must key off Streamkit's unhashed class names:
