@@ -14,6 +14,7 @@
     <ul class="route-list">
       <li><a href="/overlay"><code>/overlay</code></a> — proxied overlay (redirects to the Streamkit path)</li>
       <li><code>/overlay?target=URL</code> — override Streamkit URL</li>
+      <li><a href="/overlay?debug=1"><code>/overlay?debug=1</code></a> — overlay with the status message on</li>
       <li><a href="/css"><code>/css</code></a> — preview generated CSS</li>
       <li><code>/assets/…</code> — local images from <code>{{ASSETS_DIR}}</code></li>
       <li><a href="/health"><code>/health</code></a> — liveness</li>
@@ -24,6 +25,14 @@
       browser sources included) refreshes itself within a second. A config with a syntax error is
       ignored and the previous one stays live, so the overlay never goes blank.</p>
     <p>Changing <code>assets.dir</code> is the one setting that still needs a restart.</p>
+
+    <h2>Blank overlay?</h2>
+    <p>A transparent overlay that has not connected looks the same as a broken one. Open
+      <a href="/overlay?debug=1"><code>/overlay?debug=1</code></a> and it will say whether Discord is
+      closed, the channel is empty, or Streamkit never loaded. It is off by default so it can never
+      appear on stream, waits 1.5s before showing anything, and hides itself for good once the
+      overlay goes live. Set <code>show_status = true</code> under <code>[overlay]</code> to leave it
+      on while you set things up.</p>
 
     <h2>Local images</h2>
     <p>Drop files in <code>{{ASSETS_DIR}}</code>, then reference them in <code>config.toml</code>:</p>

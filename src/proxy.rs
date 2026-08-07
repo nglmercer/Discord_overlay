@@ -180,7 +180,7 @@ fn origin_of(url: &Url) -> String {
 ///
 /// Anything that is not successfully-served HTML (scripts, images, Cloudflare
 /// challenges, redirects) passes through untouched.
-pub fn inject_overlay(response: &mut UpstreamResponse, version: u64) {
+pub fn inject_overlay(response: &mut UpstreamResponse, version: u64, show_status: bool) {
     if !response.status.is_success() || !response.is_html() {
         return;
     }
@@ -193,7 +193,7 @@ pub fn inject_overlay(response: &mut UpstreamResponse, version: u64) {
     let injected = inject_head(
         html,
         web::RPC_BRIDGE_HEAD,
-        &web::render_overlay_head(version),
+        &web::render_overlay_head(version, show_status),
     );
     response.body = Bytes::from(injected);
 }
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn injection_loads_external_web_assets_but_no_base_tag() {
-        let out = crate::web::render_overlay_head(7);
+        let out = crate::web::render_overlay_head(7, false);
         assert!(out.contains(r#"id="discord-overlay-custom""#));
         assert!(out.contains(r#"href="/css?version=7""#));
         assert!(out.contains(r#"src="/web/hot-reload.js?version=7""#));

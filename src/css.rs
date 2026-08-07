@@ -1,5 +1,5 @@
 use crate::config::UserMap;
-use crate::web::{OVERLAY_CSS, USER_CSS_TEMPLATE};
+use crate::web::{OVERLAY_CSS, PRELOAD_CSS_TEMPLATE, USER_CSS_TEMPLATE};
 
 /// Build the full injected stylesheet for transparent canvas + per-user avatars.
 pub fn generate_overlay_css(users: &UserMap) -> String {
@@ -12,6 +12,7 @@ pub fn generate_overlay_css(users: &UserMap) -> String {
     let mut ordered: Vec<_> = users.iter().collect();
     ordered.sort_by_key(|(user_id, avatar)| (avatar.order, *user_id));
 
+    let mut preload = Vec::new();
     for (user_id, avatar) in ordered {
         let idle = escape_css_url(&avatar.idle_url);
         let speaking = escape_css_url(&avatar.speaking_url);
@@ -23,6 +24,19 @@ pub fn generate_overlay_css(users: &UserMap) -> String {
                 .replace("{{SPEAKING_URL}}", &speaking)
                 .replace("{{ORDER}}", &avatar.order.to_string()),
         );
+
+        for url in [idle, speaking] {
+            let reference = format!("url(\"{url}\")");
+            // The same file is often shared between states or users; fetching
+            // it once is enough.
+            if !url.is_empty() && !preload.contains(&reference) {
+                preload.push(reference);
+            }
+        }
+    }
+
+    if !preload.is_empty() {
+        css.push_str(&PRELOAD_CSS_TEMPLATE.replace("{{URLS}}", &preload.join(", ")));
     }
 
     css
@@ -78,6 +92,41 @@ mod tests {
         let css = generate_overlay_css(&HashMap::new());
         assert!(css.contains("ul.voice_states"));
         assert!(css.contains("display: flex"));
+    }
+
+    /// Without this, the first speech of every stream shows an empty frame
+    /// while the speaking image is fetched.
+    #[test]
+    fn every_avatar_is_preloaded_once() {
+        let mut users = HashMap::new();
+        users.insert(
+            "1".into(),
+            AvatarOverride {
+                idle_url: "https://cdn.example/idle.png".into(),
+                speaking_url: "https://cdn.example/speak.png".into(),
+                order: 0,
+            },
+        );
+        // A second user reusing one of the same files must not repeat it.
+        users.insert(
+            "2".into(),
+            AvatarOverride {
+                idle_url: "https://cdn.example/idle.png".into(),
+                speaking_url: "https://cdn.example/other.png".into(),
+                order: 0,
+            },
+        );
+
+        let css = generate_overlay_css(&users);
+        let preload = css.split("body::after").nth(1).expect("preload block");
+        assert_eq!(preload.matches("https://cdn.example/idle.png").count(), 1);
+        assert!(preload.contains("https://cdn.example/speak.png"));
+        assert!(preload.contains("https://cdn.example/other.png"));
+    }
+
+    #[test]
+    fn no_preload_block_without_users() {
+        assert!(!generate_overlay_css(&HashMap::new()).contains("body::after"));
     }
 
     #[test]

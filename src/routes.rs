@@ -55,6 +55,8 @@ pub fn app_router(state: AppState) -> Router {
         .route("/web/index.css", get(web_index_css))
         .route("/web/rpc-bridge.js", get(web_rpc_bridge))
         .route("/web/hot-reload.js", get(web_hot_reload))
+        .route("/web/status.js", get(web_status_js))
+        .route("/web/status.css", get(web_status_css))
         .route("/proxy", get(asset_proxy))
         .route("/reload-events", get(reload_events))
         .route("/rpc/{port}", get(rpc_bridge))
@@ -92,6 +94,14 @@ async fn web_hot_reload() -> impl IntoResponse {
     web_asset_response("text/javascript; charset=utf-8", web::HOT_RELOAD_JS)
 }
 
+async fn web_status_js() -> impl IntoResponse {
+    web_asset_response("text/javascript; charset=utf-8", web::STATUS_JS)
+}
+
+async fn web_status_css() -> impl IntoResponse {
+    web_asset_response("text/css; charset=utf-8", web::STATUS_CSS)
+}
+
 fn web_asset_response(content_type: &'static str, body: &'static str) -> impl IntoResponse {
     (
         [
@@ -112,12 +122,24 @@ pub struct OverlayQuery {
     pub target: Option<String>,
 }
 
+/// `?debug=1` turns the status message on for one page, without touching
+/// `config.toml` — handy for checking a browser source that came up blank.
+fn wants_status(query: Option<&str>) -> bool {
+    query.is_some_and(|query| {
+        query.split('&').any(|pair| {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            name == "debug" && !matches!(value, "0" | "false" | "off" | "no")
+        })
+    })
+}
+
 /// Entry point: send the browser to the *same* path Streamkit uses, on our
 /// origin. Keeping the path identical matters — the Streamkit SPA routes on
 /// `location.pathname` to pick the voice/chat/status overlay.
 async fn overlay(
     State(state): State<AppState>,
     headers: HeaderMap,
+    RawQuery(raw_query): RawQuery,
     Query(query): Query<OverlayQuery>,
 ) -> Result<Response, AppError> {
     let config = state.watcher.config();
@@ -127,16 +149,23 @@ async fn overlay(
         .filter(|s| !s.is_empty())
         .unwrap_or(config.streamkit.url.as_str());
     let target_url = proxy::parse_http_url(target)?;
+    let debug = wants_status(raw_query.as_deref());
 
-    let local_path = path_and_query(target_url.path(), target_url.query());
+    let mut local_path = path_and_query(target_url.path(), target_url.query());
     if local_path != "/overlay" {
+        // The redirect lands on Streamkit's own path with Streamkit's own
+        // query, so `debug` has to be carried across by hand.
+        if debug {
+            local_path.push(if target_url.query().is_some() { '&' } else { '?' });
+            local_path.push_str("debug=1");
+        }
         tracing::info!(%target, %local_path, "redirecting to the proxied overlay path");
         return Ok(Redirect::temporary(&local_path).into_response());
     }
 
     // The upstream overlay really does live at `/overlay`: serve it in place
     // rather than redirecting to ourselves forever.
-    relay(&state, target_url, Method::GET, &headers, Bytes::new()).await
+    relay(&state, target_url, Method::GET, &headers, Bytes::new(), debug).await
 }
 
 /// Reverse-proxy any path we do not serve ourselves to the Streamkit origin,
@@ -155,7 +184,8 @@ async fn upstream(State(state): State<AppState>, request: Request) -> Result<Res
         .await
         .map_err(|_| ProxyError::BodyTooLarge)?;
 
-    relay(&state, target, parts.method, &parts.headers, body).await
+    let debug = wants_status(parts.uri.query());
+    relay(&state, target, parts.method, &parts.headers, body, debug).await
 }
 
 /// Shared plumbing: forward upstream, inject into HTML, hand back the reply.
@@ -165,9 +195,11 @@ async fn relay(
     method: Method,
     headers: &HeaderMap,
     body: Bytes,
+    debug: bool,
 ) -> Result<Response, AppError> {
+    let show_status = debug || state.watcher.config().overlay.show_status;
     let mut upstream = proxy::forward(&state.client, target, method, headers, body).await?;
-    proxy::inject_overlay(&mut upstream, state.watcher.version());
+    proxy::inject_overlay(&mut upstream, state.watcher.version(), show_status);
 
     // Always re-fetch in TikTok Live Studio / OBS browser sources.
     if upstream.is_html() {
@@ -271,7 +303,8 @@ async fn asset_proxy(
     }
 
     let target = proxy::parse_http_url(&query.url)?;
-    relay(&state, target, Method::GET, &headers, Bytes::new()).await
+    // Always an image or a script, never the overlay document itself.
+    relay(&state, target, Method::GET, &headers, Bytes::new(), false).await
 }
 
 /// Domains the `/proxy` endpoint is allowed to fetch from.
@@ -326,5 +359,24 @@ impl IntoResponse for AppError {
             self.message,
         )
             .into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_flag_is_read_from_the_raw_query() {
+        assert!(wants_status(Some("debug=1")));
+        assert!(wants_status(Some("hide_names=true&debug=1")));
+        // A bare `?debug` is the natural thing to type.
+        assert!(wants_status(Some("debug")));
+
+        assert!(!wants_status(None));
+        assert!(!wants_status(Some("hide_names=true")));
+        assert!(!wants_status(Some("debug=0")));
+        // Not a look-alike parameter.
+        assert!(!wants_status(Some("nodebug=1")));
     }
 }

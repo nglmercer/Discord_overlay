@@ -1,0 +1,21 @@
+/* Diagnostic status pill, injected only when `[overlay] show_status = true`
+ * or the page was opened with `?debug=1`. Never present on a default overlay,
+ * so it cannot end up on stream by accident. */
+#discord-overlay-status-message {
+    position: fixed;
+    top: 8px;
+    left: 8px;
+    z-index: 2147483647;
+    max-width: calc(100vw - 16px);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font: 500 13px/1.4 system-ui, sans-serif;
+    color: #ffffff;
+    background: rgba(0, 0, 0, 0.72);
+    pointer-events: none;
+}
+
+/* Streamkit's reset could otherwise give the hidden node a display value. */
+#discord-overlay-status-message[hidden] {
+    display: none;
+}

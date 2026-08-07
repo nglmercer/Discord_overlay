@@ -71,6 +71,7 @@ explicitly provided path is never created automatically:
 | `[server]` | Bind host/port (default `127.0.0.1:3000`) |
 | `[streamkit]` | Default Streamkit overlay URL |
 | `[assets]` | Local image folder (default `assets/`) |
+| `[overlay]` | `show_status` — diagnostic message while the overlay is not live |
 | `[users.<discord_id>]` | `order`, `idle_url` + `speaking_url` per user |
 
 Enable **Developer Mode** in Discord → right-click a user → **Copy User ID**.
@@ -94,8 +95,13 @@ idle_url = "alice-idle.png"
 speaking_url = "alice-speaking.png"
 ```
 
-`order` controls the rendered voice-state position in the overlay. Lower
-values appear first; omitted values use `0`.
+`order` controls the rendered voice-state position in the overlay, left to
+right. Lower values appear first; omitted values use `0`, and users that all
+share the same value keep Streamkit's own alphabetical-by-nickname sort.
+
+Both images of every configured user are preloaded while the overlay boots, so
+the first time someone speaks the swap is instant instead of showing one empty
+frame.
 
 The server rewrites those to absolute URLs:
 
@@ -118,6 +124,7 @@ You can still use full remote URLs (`https://…`) if the image is hosted elsewh
 |------|-------------|
 | `GET /` | Small index page |
 | `GET /overlay` | Entry point — redirects to the proxied Streamkit path |
+| `GET /overlay?debug=1` | Same, with the status message on for that page only |
 | `GET /css` | Preview generated stylesheet |
 | `GET /web/*.css` / `GET /web/*.js` | Same-origin page assets used by the index and overlay |
 | `GET /assets/*` | **Local images** from `./assets/` |
@@ -140,6 +147,31 @@ itself within about a second. No restart, no clicking "refresh" in the source.
 - Restarting the proxy also refreshes connected overlays.
 - `assets.dir` is the one setting that still requires a restart; the static
   mount is created at startup.
+
+## Why is my overlay blank?
+
+A transparent overlay that has not connected yet looks exactly like one that is
+broken. Turn the status message on and it will tell you which:
+
+```bash
+# one page only, nothing to edit
+http://127.0.0.1:3000/overlay?debug=1
+```
+
+or set `show_status = true` under `[overlay]` in `config.toml` (hot-reloads
+like everything else).
+
+| Message | Meaning |
+|---------|---------|
+| *Discord isn't running* | The RPC ports 6463-6472 refused every connection — start the desktop app |
+| *Connected — waiting for someone in the voice channel* | Discord is bridged fine; the channel is just empty |
+| *Can't reach Streamkit* | Streamkit's own script never started — check the URL in `config.toml` |
+
+It stays **off by default** because a browser source is captured from the moment
+it starts: a message left enabled would appear on stream after any reconnect.
+Even when enabled it waits 1.5s before showing anything (a healthy start shows
+nothing at all) and disappears for good once the overlay goes live — someone
+leaving the channel mid-stream never brings it back.
 
 ## How it works
 
@@ -212,7 +244,11 @@ web/
   index.css    # landing page stylesheet
   overlay.css  # shared overlay stylesheet
   user.css     # per-user overlay CSS template
+  preload.css  # avatar cache warmer template
+  status.css   # diagnostic status pill (opt-in)
+  status.js    # decides what the status pill says
   overlay-head.html
+  status-head.html
   rpc-bridge-head.html
   rpc-bridge.js
   hot-reload.js

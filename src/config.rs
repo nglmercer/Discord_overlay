@@ -36,9 +36,23 @@ pub struct Config {
     pub streamkit: StreamkitConfig,
     #[serde(default)]
     pub assets: AssetsConfig,
+    #[serde(default)]
+    pub overlay: OverlayConfig,
     /// Keys are Discord snowflake user IDs as strings.
     #[serde(default)]
     pub users: UserMap,
+}
+
+/// Behaviour of the rendered overlay page itself.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OverlayConfig {
+    /// Show a diagnostic status message while the overlay is not yet live.
+    ///
+    /// Off by default on purpose: a browser source is captured the moment it
+    /// starts, so a message left on would go out on stream after any reconnect.
+    /// `?debug=1` turns it on for a single page without editing the config.
+    #[serde(default)]
+    pub show_status: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -248,5 +262,25 @@ mod tests {
         .expect("config without order must remain valid");
 
         assert_eq!(config.users["42"].order, 0);
+    }
+
+    /// A browser source is captured as soon as it starts, so the status
+    /// message has to be something you opt into.
+    #[test]
+    fn status_message_is_off_unless_asked_for() {
+        let config: Config = toml::from_str(DEFAULT_CONFIG).unwrap();
+        assert!(!config.overlay.show_status);
+
+        let enabled: Config = toml::from_str(
+            r#"
+            [server]
+            [streamkit]
+            url = "https://streamkit.discord.com/overlay/voice"
+            [overlay]
+            show_status = true
+            "#,
+        )
+        .unwrap();
+        assert!(enabled.overlay.show_status);
     }
 }

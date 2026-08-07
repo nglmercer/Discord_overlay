@@ -15,6 +15,14 @@ url = "https://streamkit.discord.com/overlay/voice/759263893758672916/1137940724
 [assets]
 dir = "assets"
 
+[overlay]
+# Show a diagnostic message ("Discord isn't running", ...) while the overlay is
+# not live yet. Leave this off for streaming: a browser source is captured the
+# moment it starts, so a message left on would go out on stream after any
+# reconnect. Open http://HOST:PORT/overlay?debug=1 to check a blank source
+# without changing this.
+show_status = false
+
 # Map Discord user snowflakes → idle / speaking images.
 # Developer Mode → right-click user → Copy User ID.
 #

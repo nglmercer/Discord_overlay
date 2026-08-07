@@ -1,0 +1,21 @@
+/* Warm the browser cache for every configured avatar.
+ *
+ * `content: url(...)` is only fetched at the moment the swap happens, so the
+ * first time each person speaks the browser has to go and get the speaking
+ * image — one blank frame, live, every stream. Referencing the files here
+ * fetches them while the overlay boots instead.
+ *
+ * The node is parked off-screen rather than hidden: `display: none` and
+ * `visibility: hidden` let the browser skip the fetch entirely, which would
+ * defeat the point.
+ */
+body::after {
+    content: "";
+    position: fixed;
+    top: 0;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    pointer-events: none;
+    background-image: {{URLS}};
+}
